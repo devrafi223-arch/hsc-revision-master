@@ -81,13 +81,14 @@ class _PomodoroTimerState extends State<PomodoroTimer> {
             _label,
             key: ValueKey(_label),
             style: textStyle.copyWith(
-              fontSize: 44,
-              fontWeight: FontWeight.w800,
+              fontSize: 40,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 12),
         Text(
           _remaining <= Duration.zero
               ? 'Done — take a 5-minute break.'
@@ -95,9 +96,9 @@ class _PomodoroTimerState extends State<PomodoroTimer> {
                   ? 'Focus — no phone, just this chapter.'
                   : 'Pomodoro — 25 minutes of focused revision.',
           key: const Key('pomodoro-time'),
-          style: textStyle,
+          style: textStyle.copyWith(height: 1.45),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 20),
         Wrap(
           spacing: 8,
           children: [

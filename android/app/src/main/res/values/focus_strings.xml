@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="focus_accessibility_description">HSC Revision Master Focus Mode: while a focus session is on, it watches which app comes to the foreground and shows a block screen over any app that is not this app or in your whitelist.</string>
+</resources>

@@ -2,13 +2,26 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../backup.dart';
 import '../data/syllabus.dart';
+import '../focus_store.dart';
 import '../main.dart';
 import '../tracker_store.dart';
 import '../widgets/pomodoro_timer.dart';
+import 'focus_screen.dart';
+
+// Airy spacing system (the fix for the jam-packed feel):
+// page side padding 24, section gaps 24, chapter cards 16 apart,
+// card inner padding 20, section headers 28 above / 12 below.
+// Titles are semibold at most (w600), body is regular, secondary
+// text is muted at 14-15px with line height ~1.45.
+const double _pagePadding = 24;
+const double _sectionGap = 24;
+const double _cardGap = 16;
+const double _cardPadding = 20;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -26,8 +39,23 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final TrackerStore _store = TrackerStore();
+  final FocusStore _focusStore = FocusStore();
   final TextEditingController _searchController = TextEditingController();
   bool _loaded = false;
+
+  /// True only on real Android — system-wide blocking exists there only.
+  bool get _isAndroid =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  /// On non-Android, an active focus session hides the other tabs and
+  /// shows only the focus view. On Android the tabs stay (the native
+  /// service blocks other apps instead).
+  bool get _inAppFocusActive => _focusStore.isActive && !_isAndroid;
+
+  ChapterRef? get _focusChapter {
+    final pending = _store.pendingChapters(allChapterRefs);
+    return pending.isEmpty ? null : pending.first;
+  }
   String _subject = 'all';
   String _query = '';
   String _paper = 'all';
@@ -40,6 +68,9 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _store.load().then((_) {
       if (mounted) setState(() => _loaded = true);
+    });
+    _focusStore.load().then((_) {
+      if (mounted) setState(() {});
     });
   }
 
@@ -257,6 +288,22 @@ class _HomeScreenState extends State<HomeScreen> {
           : '~${(remaining / daysLeft).toStringAsFixed(1)} tasks/day';
     }
 
+    // Non-Android focus: hide every other tab, show only the focus view.
+    if (_loaded && _inAppFocusActive) {
+      return CupertinoPageScaffold(
+        navigationBar: const CupertinoNavigationBar(
+          middle: Text('Focus'),
+        ),
+        child: SafeArea(
+          child: FocusScreen(
+            store: _focusStore,
+            focusChapter: _focusChapter,
+            onFocusChanged: () => setState(() {}),
+          ),
+        ),
+      );
+    }
+
     return CupertinoPageScaffold(
       navigationBar: CupertinoNavigationBar(
         middle: const Text('HSC Revision Master'),
@@ -283,18 +330,6 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Column(
               children: [
-                _ProgressHeader(
-                  done: done,
-                  pct: pct,
-                  weakestName: weakest.nameEn,
-                  weakestPct: _subjectPct(weakest),
-                  daysLeft: daysLeft,
-                  dailyTarget: dailyTarget,
-                  targetDate: target,
-                  dark: widget.dark,
-                  onToggleTheme: widget.onToggleTheme,
-                  onPickDate: _pickDate,
-                ),
                 Expanded(
                   child: _loaded
                       ? CupertinoTabScaffold(
@@ -319,6 +354,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 label: 'All chapters',
                               ),
                               BottomNavigationBarItem(
+                                icon: Icon(CupertinoIcons.timer),
+                                label: 'Focus',
+                              ),
+                              BottomNavigationBarItem(
                                 icon: Icon(CupertinoIcons.calendar),
                                 label: 'Exam plan',
                               ),
@@ -330,6 +369,16 @@ class _HomeScreenState extends State<HomeScreen> {
                                 return CupertinoTabView(
                                   builder: (context) => _TodayTab(
                                     store: _store,
+                                    done: done,
+                                    pct: pct,
+                                    weakestName: weakest.nameEn,
+                                    weakestPct: _subjectPct(weakest),
+                                    daysLeft: daysLeft,
+                                    dailyTarget: dailyTarget,
+                                    targetDate: target,
+                                    dark: widget.dark,
+                                    onToggleTheme: widget.onToggleTheme,
+                                    onPickDate: _pickDate,
                                     onToggleStage: _toggleStage,
                                   ),
                                 );
@@ -353,6 +402,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                     onToggleStage: _toggleStage,
                                   ),
                                 );
+                              case 2:
+                                return CupertinoTabView(
+                                  builder: (context) => FocusScreen(
+                                    store: _focusStore,
+                                    focusChapter: _focusChapter,
+                                    onFocusChanged: () => setState(() {}),
+                                  ),
+                                );
                               default:
                                 return CupertinoTabView(
                                   builder: (context) =>
@@ -367,8 +424,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             if (_toast != null)
               Positioned(
-                left: 16,
-                right: 16,
+                left: _pagePadding,
+                right: _pagePadding,
                 bottom: 92,
                 child: AnimatedOpacity(
                   opacity: 1,
@@ -376,13 +433,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
-                      vertical: 12,
+                      vertical: 14,
                     ),
                     decoration: BoxDecoration(
                       color: widget.dark
                           ? JimColors.darkText
                           : JimColors.softBlack,
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(16),
                     ),
                     child: Text(
                       _toast!,
@@ -392,6 +449,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ? JimColors.softBlack
                             : CupertinoColors.white,
                         fontWeight: FontWeight.w600,
+                        height: 1.45,
                       ),
                     ),
                   ),
@@ -434,7 +492,7 @@ class _DatePickerSheetState extends State<_DatePickerSheet> {
     final isDark =
         CupertinoTheme.of(context).brightness == Brightness.dark;
     return Container(
-      height: 320,
+      height: 340,
       color: isDark ? JimColors.darkSurface : JimColors.card,
       child: Column(
         children: [
@@ -473,6 +531,8 @@ class _DatePickerSheetState extends State<_DatePickerSheet> {
 }
 
 /// Soft rounded card in the Jim palette (replaces Material Card).
+/// Airy: 20px inner padding, 24px side margin, 16px between cards,
+/// 24px radius, very soft shadow and a 1px soft line.
 class _JimCard extends StatelessWidget {
   const _JimCard({required this.child, this.margin});
 
@@ -484,14 +544,26 @@ class _JimCard extends StatelessWidget {
     final isDark =
         CupertinoTheme.of(context).brightness == Brightness.dark;
     return Container(
-      margin: margin ?? const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      padding: const EdgeInsets.all(16),
+      margin: margin ??
+          const EdgeInsets.symmetric(
+            horizontal: _pagePadding,
+            vertical: _cardGap / 2,
+          ),
+      padding: const EdgeInsets.all(_cardPadding),
       decoration: BoxDecoration(
         color: isDark ? JimColors.darkSurface : JimColors.card,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(
           color: isDark ? JimColors.darkLine : JimColors.line,
         ),
+        boxShadow: [
+          BoxShadow(
+            color:
+                CupertinoColors.black.withValues(alpha: isDark ? 0.25 : 0.04),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: child,
     );
@@ -512,16 +584,16 @@ class _RingPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 5;
+    final radius = size.width / 2 - 6;
     final track = Paint()
       ..color = trackColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 8;
+      ..strokeWidth = 10;
     canvas.drawCircle(center, radius, track);
     final fill = Paint()
       ..color = fillColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 8
+      ..strokeWidth = 10
       ..strokeCap = StrokeCap.round;
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: radius),
@@ -534,6 +606,40 @@ class _RingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_RingPainter old) => old.progress != progress;
+}
+
+/// One calm stat row: quiet label on the left, value on the right,
+/// generous vertical padding, hairline divider handled by the parent.
+class _StatRow extends StatelessWidget {
+  const _StatRow({required this.label, required this.value});
+
+  final String label, value;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark =
+        CupertinoTheme.of(context).brightness == Brightness.dark;
+    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final muted = isDark ? JimColors.darkMuted : JimColors.muted;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: base.copyWith(fontSize: 15, color: muted, height: 1.45),
+            ),
+          ),
+          const SizedBox(width: 16),
+          Text(
+            value,
+            style: base.copyWith(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _ProgressHeader extends StatelessWidget {
@@ -562,79 +668,98 @@ class _ProgressHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final base = CupertinoTheme.of(context).textTheme.textStyle;
     final muted = dark ? JimColors.darkMuted : JimColors.muted;
+    final line = dark ? JimColors.darkLine : JimColors.line;
     return _JimCard(
+      margin: const EdgeInsets.fromLTRB(
+        _pagePadding,
+        _cardGap,
+        _pagePadding,
+        _cardGap / 2,
+      ),
       child: Column(
         children: [
-          Row(
-            children: [
-              SizedBox(
-                width: 88,
-                height: 88,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    CustomPaint(
-                      size: const Size(88, 88),
-                      painter: _RingPainter(
-                        progress: pct / 100,
-                        trackColor:
-                            dark ? JimColors.darkLine : JimColors.line,
-                        fillColor: JimColors.rose,
-                      ),
-                    ),
-                    Text(
-                      '$pct%',
-                      style: base.copyWith(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
+          // Big ring, centred, with generous empty space around it.
+          const SizedBox(height: 8),
+          SizedBox(
+            width: 120,
+            height: 120,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                CustomPaint(
+                  size: const Size(120, 120),
+                  painter: _RingPainter(
+                    progress: pct / 100,
+                    trackColor: line,
+                    fillColor: JimColors.rose,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '$done / $totalMilestones done',
-                      style: base.copyWith(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Weakest: $weakestName ($weakestPct%)',
-                      style: base.copyWith(color: muted),
-                    ),
-                    const SizedBox(height: 8),
-                    GestureDetector(
-                      key: const Key('target-date'),
-                      onTap: onPickDate,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Text(
-                          targetDate == null
-                              ? '📅 Set your exam target date'
-                              : '📅 ${daysLeft ?? 0} days left • $dailyTarget',
-                          style: base.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ),
-                  ],
+                Text(
+                  '$pct%',
+                  style: base.copyWith(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 20),
+          Text(
+            '$done / $totalMilestones done',
+            style: base.copyWith(fontSize: 20, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'One chapter at a time',
+            style: base.copyWith(fontSize: 15, color: muted, height: 1.45),
+          ),
+          const SizedBox(height: 20),
+          // Stats as separate airy rows — never crammed side by side.
+          Container(
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: line)),
+            ),
+            child: Column(
+              children: [
+                _StatRow(
+                  label: 'Needs most work',
+                  value: '$weakestName · $weakestPct%',
+                ),
+                Container(height: 1, color: line),
+                GestureDetector(
+                  key: const Key('target-date'),
+                  onTap: onPickDate,
+                  behavior: HitTestBehavior.opaque,
+                  child: _StatRow(
+                    label: 'Exam target',
+                    value: targetDate == null
+                        ? 'Set a date'
+                        : '${daysLeft ?? 0} days left',
+                  ),
+                ),
+                Container(height: 1, color: line),
+                _StatRow(
+                  label: 'Daily pace',
+                  value: dailyTarget ?? 'Set a date to see it',
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
           Row(
             children: [
-              const Icon(CupertinoIcons.moon_fill, size: 20),
-              const SizedBox(width: 8),
+              Icon(
+                CupertinoIcons.moon_fill,
+                size: 18,
+                color: muted,
+              ),
+              const SizedBox(width: 12),
               Expanded(
-                child: Text('Night mode', style: base),
+                child: Text(
+                  'Night mode',
+                  style: base.copyWith(fontSize: 15, height: 1.45),
+                ),
               ),
               CupertinoSwitch(
                 key: const Key('theme-toggle'),
@@ -653,64 +778,116 @@ class _ProgressHeader extends StatelessWidget {
 class _TodayTab extends StatelessWidget {
   const _TodayTab({
     required this.store,
+    required this.done,
+    required this.pct,
+    required this.weakestName,
+    required this.weakestPct,
+    required this.daysLeft,
+    required this.dailyTarget,
+    required this.targetDate,
+    required this.dark,
+    required this.onToggleTheme,
+    required this.onPickDate,
     required this.onToggleStage,
   });
 
   final TrackerStore store;
+  final int done, pct, weakestPct;
+  final String weakestName;
+  final int? daysLeft;
+  final String? dailyTarget;
+  final DateTime? targetDate;
+  final bool dark;
+  final VoidCallback onToggleTheme, onPickDate;
   final Future<void> Function(String, String) onToggleStage;
 
   @override
   Widget build(BuildContext context) {
     final pending = store.pendingChapters(allChapterRefs).take(5).toList();
     final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final muted =
+        CupertinoTheme.of(context).brightness == Brightness.dark
+            ? JimColors.darkMuted
+            : JimColors.muted;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(0, 4, 0, 16),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, _pagePadding),
       children: [
-        _JimCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                "Today's Focus — next 5 pending chapters",
-                style: base.copyWith(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 8),
-              if (pending.isEmpty)
-                const Text(
-                  '🎉 All 906 milestones done — re-test finished chapters after a 2–3 day gap.',
-                )
-              else
-                ...pending.map(
-                  (ref) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Text(
-                      '📖 ${ref.chapter.title} · ${ref.subject.nameEn}',
-                      style: base,
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 8),
-              const Text(
-                'How to finish a chapter: Archive → Note → Recall from memory → timed MCQ → Live class → Test paper alone.',
-              ),
-            ],
-          ),
+        _ProgressHeader(
+          done: done,
+          pct: pct,
+          weakestName: weakestName,
+          weakestPct: weakestPct,
+          daysLeft: daysLeft,
+          dailyTarget: dailyTarget,
+          targetDate: targetDate,
+          dark: dark,
+          onToggleTheme: onToggleTheme,
+          onPickDate: onPickDate,
         ),
         _JimCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Focus timer',
-                style: base.copyWith(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w800,
-                ),
+                "Today's Focus",
+                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 4),
+              Text(
+                'Next 5 pending chapters',
+                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
+              ),
+              const SizedBox(height: 16),
+              if (pending.isEmpty)
+                Text(
+                  'All 906 milestones done — re-test finished chapters after a 2–3 day gap.',
+                  style: base.copyWith(fontSize: 15, height: 1.45),
+                )
+              else
+                ...pending.map(
+                  (ref) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          margin: const EdgeInsets.only(top: 7),
+                          decoration: const BoxDecoration(
+                            color: JimColors.rose,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            '${ref.chapter.title} · ${ref.subject.nameEn}',
+                            style: base.copyWith(fontSize: 15, height: 1.45),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 12),
+              Text(
+                'How to finish a chapter: Archive, then Note, then Recall from memory, then a timed MCQ, then Live class, then a Test paper alone.',
+                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: _sectionGap),
+        _JimCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Focus timer',
+                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 16),
               const PomodoroTimer(),
             ],
           ),
@@ -753,8 +930,9 @@ class _AllTab extends StatelessWidget {
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     return Column(
       children: [
+        const SizedBox(height: 16),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          padding: const EdgeInsets.symmetric(horizontal: _pagePadding),
           child: CupertinoSearchTextField(
             key: const Key('search-field'),
             controller: searchController,
@@ -762,11 +940,12 @@ class _AllTab extends StatelessWidget {
             placeholder: 'Search — ভেক্টর, গতিবিদ্যা, Unit 1…',
           ),
         ),
+        const SizedBox(height: 16),
         SizedBox(
           height: 48,
           child: ListView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.symmetric(horizontal: _pagePadding - 5),
             children: [
               _Chip(
                 key: const ValueKey('subject-all'),
@@ -785,8 +964,9 @@ class _AllTab extends StatelessWidget {
             ],
           ),
         ),
+        const SizedBox(height: 16),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          padding: const EdgeInsets.symmetric(horizontal: _pagePadding),
           child: CupertinoSlidingSegmentedControl<int>(
             key: const Key('paper-filter'),
             groupValue: _papers.indexOf(paper),
@@ -794,15 +974,15 @@ class _AllTab extends StatelessWidget {
             thumbColor: isDark ? JimColors.darkSurface : JimColors.card,
             children: const {
               0: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 child: Text('All papers'),
               ),
               1: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 child: Text('1st paper'),
               ),
               2: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 child: Text('2nd paper'),
               ),
             },
@@ -811,8 +991,9 @@ class _AllTab extends StatelessWidget {
             },
           ),
         ),
+        const SizedBox(height: 12),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+          padding: const EdgeInsets.symmetric(horizontal: _pagePadding),
           child: CupertinoSlidingSegmentedControl<int>(
             key: const Key('status-filter'),
             groupValue: _statuses.indexOf(status),
@@ -820,19 +1001,19 @@ class _AllTab extends StatelessWidget {
             thumbColor: isDark ? JimColors.darkSurface : JimColors.card,
             children: const {
               0: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                 child: Text('All'),
               ),
               1: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                 child: Text('Pending'),
               ),
               2: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                 child: Text('In progress'),
               ),
               3: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                 child: Text('Done'),
               ),
             },
@@ -841,22 +1022,23 @@ class _AllTab extends StatelessWidget {
             },
           ),
         ),
+        const SizedBox(height: 16),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: _pagePadding),
           child: Align(
             alignment: Alignment.centerLeft,
             child: Text(
               'Showing ${filtered.length} of $totalChapters chapters',
-              style: base.copyWith(fontSize: 13, color: muted),
+              style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
             ),
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 12),
         Expanded(
           child: filtered.isEmpty
               ? const Center(child: Text('No chapters match those filters.'))
               : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                  padding: const EdgeInsets.fromLTRB(0, 4, 0, _pagePadding),
                   itemCount: filtered.length,
                   itemBuilder: (context, index) => _ChapterCard(
                     ref: filtered[index],
@@ -887,14 +1069,14 @@ class _Chip extends StatelessWidget {
     final isDark =
         CupertinoTheme.of(context).brightness == Brightness.dark;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 5),
       child: GestureDetector(
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeInOut,
           height: 44,
-          padding: const EdgeInsets.symmetric(horizontal: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: selected
@@ -910,7 +1092,8 @@ class _Chip extends StatelessWidget {
           child: Text(
             label,
             style: TextStyle(
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w600,
+              fontSize: 15,
               color: selected
                   ? (isDark ? JimColors.softBlack : CupertinoColors.white)
                   : (isDark ? JimColors.darkText : JimColors.ink),
@@ -922,7 +1105,7 @@ class _Chip extends StatelessWidget {
   }
 }
 
-class _ChapterCard extends StatelessWidget {
+class _ChapterCard extends StatefulWidget {
   const _ChapterCard({
     required this.ref,
     required this.store,
@@ -934,19 +1117,32 @@ class _ChapterCard extends StatelessWidget {
   final Future<void> Function(String, String) onToggleStage;
 
   @override
+  State<_ChapterCard> createState() => _ChapterCardState();
+}
+
+class _ChapterCardState extends State<_ChapterCard> {
+  String? _tipStageId;
+
+  @override
   Widget build(BuildContext context) {
+    final ref = widget.ref;
+    final store = widget.store;
     final done = store.doneForChapter(ref.chapter.id);
     final meta = subjectMeta[ref.subject.id];
-    final nextStage = revisionStages.firstWhere(
-      (s) => !store.isDone(ref.chapter.id, s.id),
-      orElse: () => revisionStages.last,
-    );
     final isDark =
         CupertinoTheme.of(context).brightness == Brightness.dark;
     final base = CupertinoTheme.of(context).textTheme.textStyle;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
+    final fraction = done / revisionStages.length;
+    final tip = _tipStageId == null ? null : stageTips[_tipStageId];
+
     return _JimCard(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.fromLTRB(
+        _pagePadding,
+        0,
+        _pagePadding,
+        _cardGap,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -954,86 +1150,157 @@ class _ChapterCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${ref.chapter.no}. ${ref.chapter.title}',
-                      style: base.copyWith(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '${ref.subject.nameEn} · ${ref.section.nameEn}'
-                      '${ref.chapter.displaySub.isNotEmpty ? ' · ${ref.chapter.displaySub}' : ''}'
-                      '${meta != null ? ' · Code ${meta.code}' : ''}',
-                      style: base.copyWith(fontSize: 13, color: muted),
-                    ),
-                  ],
+                child: Text(
+                  '${ref.chapter.no}. ${ref.chapter.title}',
+                  style: base.copyWith(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    height: 1.45,
+                  ),
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
+              const SizedBox(width: 16),
+              Text(
+                '$done/6',
+                style: base.copyWith(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
                   color: done == revisionStages.length
-                      ? JimColors.roseLight
-                      : (isDark ? JimColors.darkLine : JimColors.line),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  '$done/6',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
+                      ? JimColors.rose
+                      : muted,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: revisionStages.map((stage) {
-              final isDone = store.isDone(ref.chapter.id, stage.id);
-              return GestureDetector(
-                key: ValueKey('stage-${ref.chapter.id}-${stage.id}'),
-                onTap: () => onToggleStage(ref.chapter.id, stage.id),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeInOut,
-                  constraints: const BoxConstraints(minHeight: 48),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: isDone
-                        ? JimColors.rose
-                        : const Color(0x00000000),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: isDone
-                          ? JimColors.rose
-                          : (isDark ? JimColors.darkLine : JimColors.line),
-                      width: 1.5,
-                    ),
-                  ),
-                  child: Text(
-                    '${isDone ? '✓ ' : ''}${stage.short}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: isDone
-                          ? CupertinoColors.white
-                          : (isDark ? JimColors.darkText : JimColors.ink),
-                    ),
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
           const SizedBox(height: 8),
           Text(
-            'Tip: ${stageTips[nextStage.id] ?? ''}',
-            style: base.copyWith(fontSize: 13, color: muted),
+            '${ref.subject.nameEn} · ${ref.section.nameEn}'
+            '${ref.chapter.displaySub.isNotEmpty ? ' · ${ref.chapter.displaySub}' : ''}'
+            '${meta != null ? ' · Code ${meta.code}' : ''}',
+            style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
+          ),
+          const SizedBox(height: 16),
+          // Slim rose progress bar with space around it.
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: Container(
+              height: 6,
+              color: isDark ? JimColors.darkLine : JimColors.line,
+              child: AnimatedFractionallySizedBox(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOut,
+                widthFactor: fraction,
+                alignment: Alignment.centerLeft,
+                child: Container(height: 6, color: JimColors.rose),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          // Stage chips: exactly 3 per row, 10px gaps, 44px tall.
+          ...List.generate(2, (row) {
+            final rowStages = revisionStages.sublist(row * 3, row * 3 + 3);
+            return Padding(
+              padding: EdgeInsets.only(bottom: row == 0 ? 10 : 0),
+              child: Row(
+                children: [
+                  for (var i = 0; i < rowStages.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 10),
+                    Expanded(
+                      child: _StageChip(
+                        key: ValueKey(
+                          'stage-${ref.chapter.id}-${rowStages[i].id}',
+                        ),
+                        stage: rowStages[i],
+                        isDone: store.isDone(ref.chapter.id, rowStages[i].id),
+                        isDark: isDark,
+                        onTap: () {
+                          setState(() {
+                            _tipStageId = _tipStageId == rowStages[i].id
+                                ? null
+                                : rowStages[i].id;
+                          });
+                          widget.onToggleStage(
+                            ref.chapter.id,
+                            rowStages[i].id,
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            );
+          }),
+          // Per-stage tip: only when a stage chip was tapped.
+          AnimatedSize(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+            child: tip == null
+                ? const SizedBox.shrink()
+                : Container(
+                    margin: const EdgeInsets.only(top: 16),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: JimColors.rose
+                          .withValues(alpha: isDark ? 0.18 : 0.08),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Text(
+                      tip,
+                      style: base.copyWith(fontSize: 14, height: 1.45),
+                    ),
+                  ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _StageChip extends StatelessWidget {
+  const _StageChip({
+    super.key,
+    required this.stage,
+    required this.isDone,
+    required this.isDark,
+    required this.onTap,
+  });
+
+  final Stage stage;
+  final bool isDone, isDark;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+        height: 44,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isDone ? JimColors.rose : const Color(0x00000000),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isDone
+                ? JimColors.rose
+                : (isDark ? JimColors.darkLine : JimColors.line),
+            width: 1.5,
+          ),
+        ),
+        child: Text(
+          '${isDone ? '✓ ' : ''}${stage.short}',
+          textAlign: TextAlign.center,
+          style: base.copyWith(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: isDone
+                ? CupertinoColors.white
+                : (isDark ? JimColors.darkText : JimColors.ink),
+          ),
+        ),
       ),
     );
   }
@@ -1050,7 +1317,7 @@ class _ExamPlanTab extends StatelessWidget {
             ? JimColors.darkMuted
             : JimColors.muted;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(0, 4, 0, 16),
+      padding: const EdgeInsets.fromLTRB(0, 16, 0, _pagePadding),
       children: [
         _JimCard(
           child: Column(
@@ -1058,44 +1325,42 @@ class _ExamPlanTab extends StatelessWidget {
             children: [
               Text(
                 'Exam plan — HSC 2026 reference',
-                style: base.copyWith(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w800,
-                ),
+                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: 8),
-              const Text(
+              const SizedBox(height: 12),
+              Text(
                 'Written exams ran 2 Jul – 8 Aug 2026 (full syllabus, full marks). '
                 'Practicals from 15 Aug 2026. Non-practical paper: MCQ 30 + CQ 70. '
                 'Practical subjects: theory 75 (MCQ 25 + CQ 50) + practical 25.',
+                style: base.copyWith(fontSize: 15, height: 1.45),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 16),
               Text(
                 'HSC 2027 routine was not published at research time (Nov 2026) — '
                 'no 2027 date is shown here. Set your own target date on the '
                 'progress card and check dhakaeducationboard.gov.bd.',
-                style: base.copyWith(color: muted),
+                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
               ),
             ],
           ),
         ),
+        const SizedBox(height: _sectionGap),
         ...syllabusData.map((subject) {
           final meta = subjectMeta[subject.id];
           return _JimCard(
-            margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   subject.nameEn,
-                  style: base.copyWith(fontWeight: FontWeight.w800),
+                  style: base.copyWith(fontSize: 16, fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 8),
                 Text(
                   meta == null
                       ? '${subject.chapterCount} chapters'
                       : 'Code ${meta.code} · 2026 exam ${meta.exam2026}\n${meta.marks} · ${subject.chapterCount} chapters',
-                  style: base.copyWith(fontSize: 13, color: muted),
+                  style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
                 ),
               ],
             ),
