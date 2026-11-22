@@ -1,0 +1,109 @@
+# HSC Science Revision Master — multi-platform CI.
+# Runs on a PUBLIC repo, where GitHub Actions minutes are unlimited.
+# No iOS / macOS jobs (those platforms are out of scope for this app).
+#
+# NOTE on binary assets: the repo stores text files only (launcher PNGs,
+# gradle-wrapper.jar, web icons and the Windows .ico are binary, so they are
+# NOT committed). Each job restores them from a fresh `flutter create`
+# template (default Flutter icons) before building — see the
+# "Restore binary assets" step below.
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.6"
+          channel: stable
+      - name: Restore binary assets from flutter template
+        run: |
+          flutter create --org com.afterclass.hsc --project-name hsc_revision_master --platforms=android,web,windows,linux "$RUNNER_TEMP/flutter-template"
+          cp -r "$RUNNER_TEMP/flutter-template/android/app/src/main/res/mipmap-"* android/app/src/main/res/
+          cp "$RUNNER_TEMP/flutter-template/android/gradle/wrapper/gradle-wrapper.jar" android/gradle/wrapper/
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.6"
+          channel: stable
+      - name: Restore binary assets from flutter template
+        run: |
+          flutter create --org com.afterclass.hsc --project-name hsc_revision_master --platforms=android,web,windows,linux "$RUNNER_TEMP/flutter-template"
+          cp "$RUNNER_TEMP/flutter-template/web/favicon.png" web/
+          cp "$RUNNER_TEMP/flutter-template/web/icons/"*.png web/icons/
+      - run: flutter pub get
+      - run: flutter build web --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: build/web
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.6"
+          channel: stable
+      - name: Restore binary assets from flutter template
+        shell: bash
+        run: |
+          flutter create --org com.afterclass.hsc --project-name hsc_revision_master --platforms=android,web,windows,linux "$RUNNER_TEMP/flutter-template"
+          cp "$RUNNER_TEMP/flutter-template/android/gradle/wrapper/gradle-wrapper.jar" android/gradle/wrapper/ || true
+          cp "$RUNNER_TEMP/flutter-template/windows/runner/resources/app_icon.ico" windows/runner/resources/
+          cp -r "$RUNNER_TEMP/flutter-template/android/app/src/main/res/mipmap-"* android/app/src/main/res/ || true
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/windows/x64/runner/Release
+
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.6"
+          channel: stable
+      - name: Restore binary assets from flutter template
+        run: |
+          flutter create --org com.afterclass.hsc --project-name hsc_revision_master --platforms=android,web,windows,linux "$RUNNER_TEMP/flutter-template"
+          cp -r "$RUNNER_TEMP/flutter-template/android/app/src/main/res/mipmap-"* android/app/src/main/res/ || true
+          cp "$RUNNER_TEMP/flutter-template/android/gradle/wrapper/gradle-wrapper.jar" android/gradle/wrapper/ || true
+      - run: flutter pub get
+      - run: flutter build linux --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: build/linux/x64/release/bundle
