@@ -94,6 +94,10 @@ bool hostMatchesCertificateName(String host, String cn) {
 http.Client buildPinnedHttpClient() {
   final client = HttpClient(context: buildPinnedContext());
   client.badCertificateCallback = verifyPinnedLeaf;
+  // A stalled TLS handshake has no timeout of its own: without this,
+  // Supabase.initialize() can hang forever before runApp and the app
+  // stays a black window (Windows, 2026-11-23).
+  client.connectionTimeout = const Duration(seconds: 10);
   return IOClient(client);
 }
 
@@ -117,6 +121,7 @@ class _PinnedHttpOverrides extends HttpOverrides {
     // passes no context, use the pinned roots.
     final client = super.createHttpClient(context ?? buildPinnedContext());
     client.badCertificateCallback = verifyPinnedLeaf;
+    client.connectionTimeout = const Duration(seconds: 10);
     return client;
   }
 }

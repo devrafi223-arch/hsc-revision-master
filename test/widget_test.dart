@@ -6,8 +6,10 @@ import 'package:hsc_revision_master/data/syllabus.dart';
 import 'package:hsc_revision_master/main.dart';
 import 'package:hsc_revision_master/screens/auth_screen.dart';
 import 'package:hsc_revision_master/screens/home_screen.dart';
+import 'package:hsc_revision_master/screens/log_screen.dart';
 import 'package:hsc_revision_master/screens/otp_screen.dart';
 import 'package:hsc_revision_master/screens/reset_password_screen.dart';
+import 'package:hsc_revision_master/services/app_log.dart';
 import 'package:hsc_revision_master/widgets/pomodoro_timer.dart';
 
 /// Test harness mirroring HscRevisionApp's wiring: HomeScreen with a
@@ -170,6 +172,40 @@ void main() {
     await tester.enterText(find.byType(TextField), 'Confirm');
     await tester.pump();
     expect(tester.widget<TextButton>(resetButton).onPressed, isNotNull);
+  });
+
+  testWidgets('Settings has an App logs row that opens the log screen',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await enterApp(tester);
+
+    await tester.tap(find.byKey(const Key('settings-button')));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('App logs'),
+      200,
+    );
+    await tester.ensureVisible(find.text('App logs'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('App logs'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Copy all logs'), findsOneWidget);
+  });
+
+  testWidgets('Log screen shows recorded log lines', (tester) async {
+    AppLog.clear();
+    AppLog.info('test', 'startup probe line');
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jimTheme(dark: false),
+        home: const LogScreen(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('INFO test: startup probe line'),
+        findsOneWidget);
+    expect(find.text('Copy all logs'), findsOneWidget);
   });
 
   testWidgets(

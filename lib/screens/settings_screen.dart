@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../main.dart';
+import 'log_screen.dart';
 
 /// Notification settings, font size, language and theme.
 ///
@@ -353,6 +354,63 @@ class _SettingsBodyState extends State<_SettingsBody> {
               style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
             ),
           ),
+        _sectionTitle(context, 'Diagnostics'),
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 24),
+          decoration: BoxDecoration(
+            color: isDark ? JimColors.darkSurface : JimColors.card,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: isDark ? JimColors.darkLine : JimColors.line,
+            ),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(24),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (context) => const LogScreen(),
+                ),
+              );
+            },
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'App logs',
+                          style: base.copyWith(
+                            fontSize: 15,
+                            height: 1.45,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Startup, errors and network — copy them to Arlo when something goes wrong.',
+                          style: base.copyWith(
+                            fontSize: 13,
+                            color: muted,
+                            height: 1.45,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: muted,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
         if (widget.onResetAll != null) ...[
           _sectionTitle(context, 'Danger zone'),
           Container(

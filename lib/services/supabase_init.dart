@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../security/pinning.dart';
 import '../security/secure_local_storage.dart';
 import '../supabase_config.dart';
+import 'app_log.dart';
 
 /// Boots Supabase (when a real config exists) and tracks connectivity.
 ///
@@ -51,6 +52,7 @@ class SupabaseInit {
       isOnlineMode = false;
       return false;
     }
+    AppLog.info('supabase', 'initializing…');
     try {
       // STANDARD SECURITY (v3): fail-closed TLS CA pinning + encrypted
       // session storage. installPinnedHttpOverrides() is a no-op on web
@@ -72,6 +74,7 @@ class SupabaseInit {
       );
       isOnlineMode = true;
       lastError = null;
+      AppLog.info('supabase', 'online mode');
       return true;
     } catch (e) {
       // No network, bad config, unsupported platform — local-only mode.
@@ -81,6 +84,7 @@ class SupabaseInit {
       lastError =
           text.length > 300 ? '${text.substring(0, 300)}…' : text;
       isOnlineMode = false;
+      AppLog.warn('supabase', 'init failed: $lastError');
       return false;
     }
   }

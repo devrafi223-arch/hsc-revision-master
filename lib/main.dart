@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,6 +8,7 @@ import 'data/syllabus.dart';
 import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/reset_password_screen.dart';
+import 'services/app_log.dart';
 import 'services/auth_service.dart';
 import 'services/supabase_init.dart';
 import 'services/messaging_service.dart';
@@ -125,13 +127,47 @@ InputDecoration jimFieldDecoration({
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Error capture FIRST: any uncaught error is written to the log
+  // (in-memory + file next to the exe on Windows) and pops up once,
+  // so Rafi can copy it to Arlo instead of a black screen with no
+  // explanation. Without this a release-mode build failure is silent.
+  FlutterError.onError = (details) {
+    AppLog.error(
+      'flutter',
+      '${details.exceptionAsString()}\n${details.stack ?? ''}',
+    );
+    AppLog.maybeShowErrorPopup();
+  };
+  ui.PlatformDispatcher.instance.onError = (error, stack) {
+    AppLog.error('uncaught', '$error\n$stack');
+    AppLog.maybeShowErrorPopup();
+    return true;
+  };
+  await AppLog.init();
+  AppLog.info('app', 'starting');
   // Supabase + push setup. Both are fully guarded and never throw: while
   // lib/supabase_config.dart still holds the placeholder values the app
   // runs in LOCAL-ONLY mode (see lib/services/supabase_init.dart).
   try {
-    await SupabaseInit.initialize();
-  } catch (_) {
-    // Local-only mode.
+    // NEVER let the network block the first frame: Supabase.initialize()
+    // is awaited before runApp and a stalled TLS/network call has no
+    // timeout of its own — on a bad connection the app used to stay a
+    // black window forever (Windows, 2026-11-23). 12s is plenty on a
+    // normal connection; on timeout the app starts offline and the auth
+    // screen offers Try again.
+    final online = await SupabaseInit.initialize().timeout(
+      const Duration(seconds: 12),
+      onTimeout: () {
+        AppLog.warn(
+          'startup',
+          'Supabase init timed out after 12s — continuing offline',
+        );
+        return false;
+      },
+    );
+    AppLog.info('startup', 'Supabase init done: online=$online');
+  } catch (e) {
+    AppLog.warn('startup', 'Supabase init failed: $e');
   }
   try {
     await MessagingService.init();
@@ -145,6 +181,11 @@ Future<void> main() async {
   assert(totalChapters == 151, 'Syllabus must have 151 chapters');
   assert(totalMilestones == 906, 'Syllabus must have 906 milestones');
   runApp(const HscRevisionApp());
+  // Proves the UI painted: if the log has this line but the screen is
+  // black, the problem is rendering, not startup.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    AppLog.info('app', 'first frame painted');
+  });
 }
 
 class HscRevisionApp extends StatefulWidget {
@@ -199,6 +240,7 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
     return MaterialApp(
       title: 'HSC Science Revision Master',
       debugShowCheckedModeBanner: false,
+      navigatorKey: AppLog.navigatorKey,
       theme: jimTheme(dark: _dark),
       // Auth gate (v3): signed-out users see the auth screen, signed-in
       // users see the tracker. In local-only mode AuthService emits null
