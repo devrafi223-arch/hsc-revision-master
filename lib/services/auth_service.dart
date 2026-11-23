@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/app_user.dart';
@@ -23,6 +24,16 @@ class AuthService {
       'lib/supabase_config.dart with your real project values.';
 
   SupabaseClient get _auth => SupabaseInit.client;
+
+  /// Where Supabase sends the browser after email confirm / Google
+  /// sign-in on mobile: a deep link back into the app (supabase_flutter
+  /// picks the session up via app_links). Without this, Supabase uses the
+  /// project's Site URL — the default is http://localhost:3000, which
+  /// refuses to connect on a real phone (seen 2026-11-23: the confirm link
+  /// landed on a dead localhost page). The same URL must be listed in the
+  /// Supabase dashboard: Auth -> URL Configuration -> Site URL and
+  /// Redirect URLs. Web passes null (the web app uses its own URL).
+  static const String _authRedirect = 'com.rafi.hscrevise://login-callback';
 
   /// Emits the signed-in uid, or null when signed out. In local-only mode
   /// emits a single null (there is no account without Supabase).
@@ -55,6 +66,7 @@ class AuthService {
     final response = await _auth.auth.signUp(
       email: email,
       password: password,
+      emailRedirectTo: kIsWeb ? null : _authRedirect,
       data: {'display_name': name},
     );
     final user = response.user;
@@ -92,7 +104,10 @@ class AuthService {
     // Supabase Auth's built-in OAuth (no google_sign_in package): opens
     // the browser for Google sign-in and returns to the app via deep link.
     // Returns false when the flow is cancelled / cannot start.
-    final launched = await _auth.auth.signInWithOAuth(OAuthProvider.google);
+    final launched = await _auth.auth.signInWithOAuth(
+      OAuthProvider.google,
+      redirectTo: kIsWeb ? null : _authRedirect,
+    );
     if (!launched) {
       throw Exception('Google sign-in cancelled.');
     }

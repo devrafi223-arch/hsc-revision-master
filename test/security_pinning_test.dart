@@ -139,7 +139,14 @@ emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 
   test('deny-everything callback still fails the handshake (fail-closed)',
       () async {
-    final client = HttpClient(context: buildPinnedContext());
+    // Empty trust store: validation MUST fail in every environment, so
+    // the callback is actually consulted. (A pins-only context validates
+    // fine against the real chain on a direct connection — CI proved it —
+    // so it cannot force the deny path. A callback that returned true
+    // here would let the handshake through, so this also guards against
+    // an allow-all regression.)
+    final client =
+        HttpClient(context: SecurityContext(withTrustedRoots: false));
     client.badCertificateCallback = (cert, host, port) => false;
     try {
       await expectLater(
