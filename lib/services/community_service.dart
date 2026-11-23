@@ -482,8 +482,42 @@ class CommunityService {
     }
   }
 
+  /// Toggles [uid]'s reaction for [emoji] inside a stored `reactions`
+  /// map and returns the new map. Pure, so it is unit-tested.
+  ///
+  /// New shape: `reactions[emoji]` is the list of reactor uids, so the
+  /// count is the list length and a second tap removes the user again.
+  /// Legacy shape: a bare int count (no owners) migrates to `[uid]` on
+  /// the first toggle — the old anonymous count cannot be attributed
+  /// to anyone, so it restarts from this user.
+  static Map<String, dynamic> toggleReactionIn(
+    Map<String, dynamic> raw,
+    String emoji,
+    String uid,
+  ) {
+    final next = Map<String, dynamic>.from(raw);
+    final current = next[emoji];
+    final List<String> users;
+    if (current is List) {
+      users = current.map((e) => e.toString()).toList();
+    } else {
+      users = <String>[];
+    }
+    if (users.contains(uid)) {
+      users.remove(uid);
+    } else {
+      users.add(uid);
+    }
+    next[emoji] = users;
+    return next;
+  }
+
+  /// Toggles the current user's reaction for [emoji] on [messageId]:
+  /// first tap adds it, second tap removes it again. One user can
+  /// only ever hold one reaction per emoji.
   Future<void> react(String messageId, String emoji) async {
-    if (!SupabaseInit.isOnlineMode) return;
+    final uid = AuthService.instance.effectiveUid;
+    if (uid == null || !SupabaseInit.isOnlineMode) return;
     try {
       final row = await _db
           .from('messages')
@@ -493,11 +527,12 @@ class CommunityService {
       if (row == null) return;
       final reactions =
           Map<String, dynamic>.from(row['reactions'] as Map? ?? {});
-      reactions[emoji] = ((reactions[emoji] as num?)?.toInt() ?? 0) + 1;
-      await _db
-          .from('messages')
-          .update({'reactions': reactions})
-          .eq('id', messageId);
+      await _db.from('messages').update(
+        {'reactions': toggleReactionIn(reactions, emoji, uid)},
+      ).eq('id', messageId);
+      // Refresh the feed right away, like the other writes: without
+      // this the count only moves when a Realtime event arrives.
+      _notifyLocalChange();
     } catch (_) {
       // Best effort.
     }

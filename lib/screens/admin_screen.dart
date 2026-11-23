@@ -7,7 +7,11 @@ import '../services/auth_service.dart';
 /// Admin panel. Guarded: only admins (per [AdminService.isAdmin]) see
 /// the stats and reports; everyone else sees "Admin only".
 class AdminScreen extends StatelessWidget {
-  const AdminScreen({super.key});
+  const AdminScreen({super.key, this.onSignOut});
+
+  /// Shown as a logout button in the AppBar. Set by the /admin gate
+  /// (web); null when the panel is opened any other way.
+  final VoidCallback? onSignOut;
 
   Future<void> _showInfo(BuildContext context, String message) async {
     await showDialog<void>(
@@ -97,6 +101,14 @@ class AdminScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Admin panel'),
+        actions: [
+          if (onSignOut != null)
+            IconButton(
+              onPressed: onSignOut,
+              icon: const Icon(Icons.logout),
+              tooltip: 'Sign out',
+            ),
+        ],
       ),
       body: SafeArea(
         child: uid == null

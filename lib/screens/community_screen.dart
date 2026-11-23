@@ -11,6 +11,7 @@ import '../services/admin_service.dart';
 import '../services/auth_service.dart';
 import '../services/community_service.dart';
 import '../services/moderation.dart';
+import '../services/presence_service.dart';
 import '../services/sync_service.dart';
 import '../services/user_repository.dart';
 import '../services/voice_service.dart';
@@ -90,7 +91,26 @@ class _CommunityScreenState extends State<CommunityScreen> {
   String? get _uid => AuthService.instance.effectiveUid;
 
   @override
+  void initState() {
+    super.initState();
+    // Join presence once per screen lifetime: who is online and who
+    // is typing. The rail keeps its own leaderboard future, so the
+    // presence rebuilds below never refetch it.
+    final uid = _uid;
+    if (uid != null) {
+      UserRepository.instance.getUser(uid).then((user) {
+        if (!mounted) return;
+        PresenceService.instance.start(
+          uid: uid,
+          name: user?.name ?? 'Student',
+        );
+      });
+    }
+  }
+
+  @override
   void dispose() {
+    PresenceService.instance.stop();
     _composerController.dispose();
     _searchController.dispose();
     _scrollController.dispose();
@@ -128,6 +148,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   Future<void> _sendText() async {
+    PresenceService.instance.clearTyping();
     final text = _composerController.text.trim();
     if (text.isEmpty) return;
     if (Moderation.isFlagged(text)) {
@@ -231,7 +252,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               TextField(
                 controller: questionController,
                 decoration: jimFieldDecoration(
@@ -494,10 +515,10 @@ class _CommunityScreenState extends State<CommunityScreen> {
             if (snapshot.data != true) return const SizedBox.shrink();
             return Container(
               width: double.infinity,
-              margin: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+              margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               padding: const EdgeInsets.symmetric(
                 horizontal: 16,
-                vertical: 10,
+                vertical: 8,
               ),
               decoration: BoxDecoration(
                 color: JimColors.rose.withValues(
@@ -513,18 +534,22 @@ class _CommunityScreenState extends State<CommunityScreen> {
             );
           },
         ),
-        _ProgressRail(
-          onOpenProfile: (user) {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => ProfileScreen(userId: user.id),
-              ),
-            );
-          },
+        ValueListenableBuilder<PresenceSnapshot>(
+          valueListenable: PresenceService.instance.notifier,
+          builder: (context, snapshot, _) => _ProgressRail(
+            onlineUids: snapshot.onlineUids,
+            onOpenProfile: (user) {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ProfileScreen(userId: user.id),
+                ),
+              );
+            },
+          ),
         ),
         // Session-wide anonymous posting: stays on until turned off.
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
           child: Row(
             children: [
               const Icon(
@@ -554,7 +579,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
           child: TextField(
             controller: _searchController,
             onChanged: (q) => setState(() => _searchQuery = q),
@@ -564,14 +589,14 @@ class _CommunityScreenState extends State<CommunityScreen> {
               borderRadius: 999,
               contentPadding: const EdgeInsets.symmetric(
                 horizontal: 14,
-                vertical: 10,
+                vertical: 8,
               ),
               prefixIcon: const Icon(Icons.search),
             ),
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
           child: Row(
             children: [
               _FilterChip(
@@ -583,13 +608,21 @@ class _CommunityScreenState extends State<CommunityScreen> {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  'Realtime • messages appear instantly when online',
-                  style: base.copyWith(
-                    fontSize: 13,
-                    color: muted,
-                    height: 1.45,
-                  ),
+                child: ValueListenableBuilder<PresenceSnapshot>(
+                  valueListenable: PresenceService.instance.notifier,
+                  builder: (context, snapshot, _) {
+                    final online = snapshot.onlineUids.isEmpty
+                        ? ''
+                        : '● ${snapshot.onlineUids.length} online • ';
+                    return Text(
+                      '${online}Realtime • messages appear instantly when online',
+                      style: base.copyWith(
+                        fontSize: 13,
+                        color: muted,
+                        height: 1.45,
+                      ),
+                    );
+                  },
                 ),
               ),
             ],
@@ -643,7 +676,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
               }
               return ListView.builder(
                 controller: _scrollController,
-                padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
                 itemCount: messages.length,
                 itemBuilder: (context, index) {
                   final message = messages[index];
@@ -663,12 +696,37 @@ class _CommunityScreenState extends State<CommunityScreen> {
             },
           ),
         ),
+        ValueListenableBuilder<PresenceSnapshot>(
+          valueListenable: PresenceService.instance.notifier,
+          builder: (context, snapshot, _) {
+            if (snapshot.typingNames.isEmpty) {
+              return const SizedBox.shrink();
+            }
+            final names = snapshot.typingNames.take(2).join(', ');
+            final more = snapshot.typingNames.length > 2
+                ? ' +${snapshot.typingNames.length - 2}'
+                : '';
+            final verb = snapshot.typingNames.length == 1 ? 'is' : 'are';
+            return Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Text(
+                '$names$more $verb typing…',
+                style: base.copyWith(
+                  fontSize: 12,
+                  color: muted,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            );
+          },
+        ),
         Container(
           decoration: BoxDecoration(
             color: isDark ? JimColors.darkSurface : JimColors.card,
             border: Border(top: BorderSide(color: line)),
           ),
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -726,9 +784,10 @@ class _CommunityScreenState extends State<CommunityScreen> {
                         borderRadius: 999,
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 14,
-                          vertical: 10,
+                          vertical: 8,
                         ),
                       ),
+                      onChanged: (_) => PresenceService.instance.setTyping(),
                       onSubmitted: (_) => _sendText(),
                     ),
                   ),
@@ -810,7 +869,7 @@ class _FilterChip extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
           color: selected
               ? (isDark ? JimColors.darkText : JimColors.softBlack)
@@ -839,10 +898,25 @@ class _FilterChip extends StatelessWidget {
 
 /// Horizontal progress rail: weekly top 10, each with avatar, name and
 /// a progress ring (% = totalChaptersDone / 151).
-class _ProgressRail extends StatelessWidget {
-  const _ProgressRail({required this.onOpenProfile});
+class _ProgressRail extends StatefulWidget {
+  const _ProgressRail({required this.onOpenProfile, required this.onlineUids});
 
   final ValueChanged<AppUser> onOpenProfile;
+
+  /// Uids currently online (Realtime Presence). Shown as a green dot
+  /// on the avatar. The parent rebuilds this rail on presence changes;
+  /// the leaderboard future below is fetched once, in initState, so
+  /// those rebuilds — and every search keystroke — never refetch it.
+  /// That refetch-on-every-keystroke was the community tab's jank.
+  final Set<String> onlineUids;
+
+  @override
+  State<_ProgressRail> createState() => _ProgressRailState();
+}
+
+class _ProgressRailState extends State<_ProgressRail> {
+  late final Future<List<AppUser>> _leaderboardFuture =
+      UserRepository.instance.leaderboardWeekly(limit: 10);
 
   @override
   Widget build(BuildContext context) {
@@ -850,7 +924,7 @@ class _ProgressRail extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     return FutureBuilder<List<AppUser>>(
-      future: UserRepository.instance.leaderboardWeekly(limit: 10),
+      future: _leaderboardFuture,
       builder: (context, snapshot) {
         final users = snapshot.data ?? [];
         if (users.isEmpty) {
@@ -863,27 +937,30 @@ class _ProgressRail extends StatelessWidget {
           );
         }
         return SizedBox(
-          height: 108,
+          height: 92,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             itemCount: users.length,
             itemBuilder: (context, index) {
               final user = users[index];
               final pct = (user.totalChaptersDone * 100 / 151).round();
               return GestureDetector(
-                onTap: () => onOpenProfile(user),
+                onTap: () => widget.onOpenProfile(user),
                 child: Container(
-                  width: 76,
-                  margin: const EdgeInsets.only(right: 12),
+                  width: 64,
+                  margin: const EdgeInsets.only(right: 8),
                   child: Column(
                     children: [
-                      _ProgressRing(
-                        progress: user.totalChaptersDone / 151,
-                        size: 56,
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          _ProgressRing(
+                            progress: user.totalChaptersDone / 151,
+                            size: 48,
                         child: Container(
-                          width: 44,
-                          height: 44,
+                          width: 38,
+                          height: 38,
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
@@ -910,13 +987,34 @@ class _ProgressRail extends StatelessWidget {
                               : null,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                          if (widget.onlineUids.contains(user.id))
+                            Positioned(
+                              right: 0,
+                              bottom: 0,
+                              child: Container(
+                                width: 12,
+                                height: 12,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: const Color(0xFF22C55E),
+                                  border: Border.all(
+                                    color: isDark
+                                        ? JimColors.darkBg
+                                        : JimColors.paper,
+                                    width: 2,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
                       Text(
                         user.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
-                        style: base.copyWith(fontSize: 12, height: 1.45),
+                        style: base.copyWith(fontSize: 11, height: 1.4),
                       ),
                       Text(
                         '$pct%',
@@ -1011,6 +1109,10 @@ class _RingPainter extends CustomPainter {
   bool shouldRepaint(_RingPainter old) => old.progress != progress;
 }
 
+/// A chat bubble in the Telegram / WhatsApp-group style: own messages
+/// hug the right in a rose tint, others hug the left with a small
+/// avatar and a coloured name, asymmetric corners, time tucked into
+/// the bubble's bottom-right. No big bordered cards.
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
     required this.message,
@@ -1035,128 +1137,108 @@ class _MessageBubble extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
-    final line = isDark ? JimColors.darkLine : JimColors.line;
-    if (message.flagged) {
-      return Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: isDark ? JimColors.darkBg : const Color(0xFFF0EEE9),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: line),
-        ),
-        child: Text(
-          'Removed by moderation',
-          style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
-        ),
-      );
-    }
     final isMine = currentUid != null && message.authorId == currentUid;
-    return GestureDetector(
-      onLongPress: onLongPress,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: isMine
-              ? JimColors.rose.withValues(alpha: isDark ? 0.22 : 0.10)
-              : (isDark ? JimColors.darkSurface : JimColors.card),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: line),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    if (message.flagged) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(
           children: [
-            Row(
-              children: [
-                // Avatar circle: generic grey person for anonymous
-                // messages (no photo, no name); initial / photo otherwise.
-                Container(
-                  width: 28,
-                  height: 28,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: message.isAnonymous
-                        ? (isDark ? JimColors.darkLine : JimColors.line)
-                        : JimColors.rose,
-                    image: !message.isAnonymous &&
-                            message.authorPhoto != null &&
-                            message.authorPhoto!.isNotEmpty
-                        ? DecorationImage(
-                            image: NetworkImage(message.authorPhoto!),
-                            fit: BoxFit.cover,
-                            onError: (_, __) {},
-                          )
-                        : null,
-                  ),
-                  child: message.isAnonymous
-                      ? const Icon(
-                          Icons.person,
-                          size: 15,
-                          color: Colors.white,
-                        )
-                      : message.authorPhoto == null ||
-                              message.authorPhoto!.isEmpty
-                          ? Text(
-                              message.authorName.isNotEmpty
-                                  ? message.authorName[0].toUpperCase()
-                                  : '?',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            )
-                          : null,
-                ),
-                const SizedBox(width: 8),
-                if (message.pinned)
-                  Container(
-                    margin: const EdgeInsets.only(right: 8),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: JimColors.rose,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: const Text(
-                      'Pinned',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                Expanded(
-                  child: Text(
-                    _displayName(message),
-                    style: base.copyWith(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                Text(
-                  _formatTimestamp(message.timestamp),
-                  style: base.copyWith(fontSize: 12, color: muted),
-                ),
-              ],
-            ),
-            if (message.replyToText != null &&
-                message.replyToText!.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Container(
+            Flexible(
+              child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 12,
                   vertical: 8,
                 ),
                 decoration: BoxDecoration(
+                  color: isDark ? JimColors.darkSurface : JimColors.card,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                    bottomLeft: Radius.circular(4),
+                    bottomRight: Radius.circular(16),
+                  ),
+                ),
+                child: Text(
+                  'Removed by moderation',
+                  style: base.copyWith(fontSize: 13, color: muted),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    final bubble = GestureDetector(
+      onLongPress: onLongPress,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: isMine
+              ? JimColors.rose.withValues(alpha: isDark ? 0.22 : 0.10)
+              : (isDark ? JimColors.darkSurface : JimColors.card),
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(isMine ? 16 : 4),
+            bottomRight: Radius.circular(isMine ? 4 : 16),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (!isMine || message.pinned)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (!isMine)
+                    Flexible(
+                      child: Text(
+                        _displayName(message),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: base.copyWith(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color:
+                              message.isAnonymous ? muted : JimColors.rose,
+                        ),
+                      ),
+                    ),
+                  if (message.pinned) ...[
+                    if (!isMine) const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: JimColors.rose,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: const Text(
+                        'Pinned',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            if (message.replyToText != null &&
+                message.replyToText!.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
                   color: isDark ? JimColors.darkBg : JimColors.paper,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
                   border: Border(
                     left: BorderSide(color: JimColors.rose, width: 3),
                   ),
@@ -1166,24 +1248,24 @@ class _MessageBubble extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: base.copyWith(
-                    fontSize: 13,
+                    fontSize: 12,
                     color: muted,
-                    height: 1.45,
+                    height: 1.4,
                   ),
                 ),
               ),
             ],
             if (message.text != null && message.text!.isNotEmpty) ...[
-              const SizedBox(height: 10),
+              if (!isMine || message.pinned) const SizedBox(height: 4),
               Text(
                 message.text!,
-                style: base.copyWith(fontSize: 15, height: 1.45),
+                style: base.copyWith(fontSize: 14, height: 1.4),
               ),
             ],
             if (message.photoUrl != null && message.photoUrl!.isNotEmpty) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
               ClipRRect(
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(12),
                 child: message.photoUrl!.startsWith('http')
                     ? Image.network(
                         message.photoUrl!,
@@ -1198,7 +1280,7 @@ class _MessageBubble extends StatelessWidget {
               ),
             ],
             if (message.type == MessageType.poll && message.poll != null) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
               _PollCard(
                 poll: message.poll!,
                 currentUid: currentUid,
@@ -1207,48 +1289,176 @@ class _MessageBubble extends StatelessWidget {
             ],
             if (message.type == MessageType.voice &&
                 message.voiceUrl != null) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
               _VoiceRow(
                 isPlaying: isPlayingVoice,
                 onPlay: onPlayVoice,
               ),
             ],
-            const SizedBox(height: 12),
+            const SizedBox(height: 6),
             Row(
               children: [
-                for (final emoji in ['❤️', '👍', '🎉'])
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: GestureDetector(
-                      onTap: () => onReact(emoji),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isDark ? JimColors.darkBg : JimColors.paper,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: line),
-                        ),
-                        child: Text(
-                          '$emoji ${message.reactions[emoji] ?? 0}',
-                          style: base.copyWith(fontSize: 13),
-                        ),
-                      ),
-                    ),
+                // Icons, not emoji text: the glyphs render as empty
+                // boxes on some Android web fonts, while Material
+                // icons always render. The emoji strings stay as the
+                // stored keys, so old counts keep working.
+                for (final reaction in const [
+                  ('❤️', Icons.favorite),
+                  ('👍', Icons.thumb_up),
+                  ('🎉', Icons.celebration),
+                ])
+                  _ReactionChip(
+                    icon: reaction.$2,
+                    count: message.reactions[reaction.$1] ?? 0,
+                    reacted: currentUid != null &&
+                        (message.reactionUsers[reaction.$1]
+                                ?.contains(currentUid) ??
+                            false),
+                    onTap: () => onReact(reaction.$1),
                   ),
                 const Spacer(),
                 if (currentUid != null &&
                     message.bookmarkedBy.contains(currentUid))
-                  const Icon(
-                    Icons.bookmark,
-                    size: 16,
-                    color: JimColors.rose,
+                  const Padding(
+                    padding: EdgeInsets.only(right: 6),
+                    child: Icon(
+                      Icons.bookmark,
+                      size: 13,
+                      color: JimColors.rose,
+                    ),
                   ),
+                Text(
+                  _formatTimestamp(message.timestamp),
+                  style: base.copyWith(fontSize: 11, color: muted),
+                ),
               ],
             ),
           ],
+        ),
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment:
+            isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: [
+          if (!isMine) ...[
+            _BubbleAvatar(message: message, isDark: isDark),
+            const SizedBox(width: 6),
+          ],
+          Flexible(child: bubble),
+        ],
+      ),
+    );
+  }
+}
+
+/// Small round avatar next to other people's bubbles: generic grey
+/// person for anonymous messages (no photo, no name); initial or photo
+/// otherwise.
+class _BubbleAvatar extends StatelessWidget {
+  const _BubbleAvatar({required this.message, required this.isDark});
+
+  final CommunityMessage message;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 28,
+      height: 28,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: message.isAnonymous
+            ? (isDark ? JimColors.darkLine : JimColors.line)
+            : JimColors.rose,
+        image: !message.isAnonymous &&
+                message.authorPhoto != null &&
+                message.authorPhoto!.isNotEmpty
+            ? DecorationImage(
+                image: NetworkImage(message.authorPhoto!),
+                fit: BoxFit.cover,
+                onError: (_, __) {},
+              )
+            : null,
+      ),
+      child: message.isAnonymous
+          ? const Icon(
+              Icons.person,
+              size: 15,
+              color: Colors.white,
+            )
+          : message.authorPhoto == null || message.authorPhoto!.isEmpty
+              ? Text(
+                  message.authorName.isNotEmpty
+                      ? message.authorName[0].toUpperCase()
+                      : '?',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                )
+              : null,
+    );
+  }
+}
+
+/// One reaction chip: a Material icon + count. Filled rose when the
+/// current user reacted (tap again to remove it), plain otherwise.
+class _ReactionChip extends StatelessWidget {
+  const _ReactionChip({
+    required this.icon,
+    required this.count,
+    required this.reacted,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final int count;
+  final bool reacted;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
+    final muted = isDark ? JimColors.darkMuted : JimColors.muted;
+    final line = isDark ? JimColors.darkLine : JimColors.line;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: reacted
+                ? JimColors.rose
+                : (isDark ? JimColors.darkBg : JimColors.paper),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: reacted ? JimColors.rose : line),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 14,
+                color: reacted ? Colors.white : muted,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                '$count',
+                style: base.copyWith(
+                  fontSize: 13,
+                  color: reacted ? Colors.white : null,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1276,7 +1486,7 @@ class _PollCard extends StatelessWidget {
     final counts = poll.counts;
     final percentages = poll.percentages;
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: isDark ? JimColors.darkBg : JimColors.paper,
         borderRadius: BorderRadius.circular(16),
@@ -1289,7 +1499,7 @@ class _PollCard extends StatelessWidget {
             poll.question,
             style: base.copyWith(fontSize: 15, fontWeight: FontWeight.w600),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           for (var i = 0; i < poll.options.length; i++)
             Padding(
               padding: EdgeInsets.only(
@@ -1298,7 +1508,7 @@ class _PollCard extends StatelessWidget {
               child: GestureDetector(
                 onTap: myVote == null ? () => onVote(i) : null,
                 child: Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
@@ -1380,7 +1590,7 @@ class _VoiceRow extends StatelessWidget {
           onPressed: onPlay,
           icon: Icon(
             isPlaying ? Icons.stop_circle : Icons.play_circle,
-            size: 32,
+            size: 28,
           ),
         ),
         const SizedBox(width: 8),

@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'data/syllabus.dart';
+import 'screens/admin_gate_screen.dart';
 import 'screens/home_screen.dart';
-import 'services/admin_service.dart';
 import 'services/app_log.dart';
 import 'services/auth_service.dart';
 import 'services/supabase_init.dart';
@@ -174,16 +175,10 @@ Future<void> main() async {
   try {
     await AuthService.instance.ensureLocalUid();
   } catch (_) {}
-  // Admin panel without login: the first launch on a device makes its
-  // local id the device admin (AdminService's existing first-user
-  // fallback — registration used to record it). Rafi's phone gets the
-  // panel; a real is_admin flag in Supabase still wins over this.
-  try {
-    final localUid = AuthService.instance.localUid;
-    if (localUid != null) {
-      await AdminService.recordFirstUser(localUid);
-    }
-  } catch (_) {}
+  // NOTE: no device-admin fallback here anymore (Rafi, 2026-11-24):
+  // the admin panel is securely locked at the web /admin route behind
+  // an email + password sign-in and a strict users.is_admin check.
+  // The old recordFirstUser call is deleted with it.
   try {
     await MessagingService.init();
   } catch (_) {
@@ -231,6 +226,10 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
 
   @override
   Widget build(BuildContext context) {
+    // Web only: the /admin URL opens the locked admin gate instead of
+    // the tracker. There is no link to it from the app UI.
+    final isAdminRoute = kIsWeb &&
+        (Uri.base.path == '/admin' || Uri.base.path == '/admin/');
     return MaterialApp(
       title: 'HSC Science Revision Master',
       debugShowCheckedModeBanner: false,
@@ -239,12 +238,14 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
       // No login screen (Rafi, 2026-11-23): the app opens straight
       // into the tracker. Online features (community, notes sync,
       // groups) run under a local anonymous id from
-      // AuthService.ensureLocalUid; the admin panel still needs a
-      // real admin account, so its row stays hidden without one.
-      home: HomeScreen(
-        dark: _dark,
-        onToggleTheme: _toggleTheme,
-      ),
+      // AuthService.ensureLocalUid; the admin panel lives only at
+      // /admin (web), behind an admin sign-in.
+      home: isAdminRoute
+          ? const AdminGateScreen()
+          : HomeScreen(
+              dark: _dark,
+              onToggleTheme: _toggleTheme,
+            ),
     );
   }
 }

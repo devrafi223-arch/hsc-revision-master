@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:typed_data';
 
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/app_user.dart';
@@ -73,7 +75,27 @@ class UserRepository {
           .select()
           .eq('id', uid)
           .maybeSingle();
-      if (row == null) return _localCache[uid];
+      if (row == null) {
+        final cached = _localCache[uid];
+        if (cached != null) return cached;
+        // No row (local anonymous id): a photo saved on this device
+        // still counts, so the profile and message avatars show it.
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final url = prefs.getString(_localPhotoKey(uid));
+          if (url != null && url.isNotEmpty) {
+            final user = AppUser(
+              id: uid,
+              name: 'Student',
+              email: '',
+              photoUrl: url,
+            );
+            _localCache[uid] = user;
+            return user;
+          }
+        } catch (_) {}
+        return null;
+      }
       final user = AppUser.fromMap(uid, row);
       _localCache[uid] = user;
       return user;
@@ -161,6 +183,61 @@ class UserRepository {
     } catch (_) {
       // Privacy update is best effort; the local cache keeps the old value.
     }
+  }
+
+  /// SharedPreferences key holding the local profile photo for a uid
+  /// that has no `users` row (local anonymous ids have no auth row, so
+  /// the `users.id -> auth.users(id)` FK rejects an upsert for them).
+  /// The photo then lives on this device only — same honest limit as
+  /// the device-admin fallback — until a real account exists.
+  static String _localPhotoKey(String uid) => 'local-photo-url-$uid';
+
+  Future<void> updatePhoto(String uid, String photoUrl) async {
+    final current = _localCache[uid];
+    if (current != null) {
+      _localCache[uid] = AppUser(
+        id: current.id,
+        name: current.name,
+        email: current.email,
+        photoUrl: photoUrl,
+        coverUrl: current.coverUrl,
+        profileVisibility: current.profileVisibility,
+        photoVisibility: current.photoVisibility,
+        isAdmin: current.isAdmin,
+        streak: current.streak,
+        totalChaptersDone: current.totalChaptersDone,
+        milestoneIds: current.milestoneIds,
+        followingIds: current.followingIds,
+      );
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_localPhotoKey(uid), photoUrl);
+    } catch (_) {
+      // Local persistence is best effort.
+    }
+    if (!SupabaseInit.isOnlineMode) return;
+    try {
+      await _db.from('users').update({'photo_url': photoUrl}).eq('id', uid);
+    } catch (_) {
+      // Best effort; the local copy above is what the UI shows.
+    }
+  }
+
+  /// Uploads a profile photo to the public `notes` bucket and returns
+  /// its public URL. Throws on failure so the caller can report it.
+  Future<String> uploadProfilePhoto(String uid, Uint8List bytes) async {
+    final path =
+        'profile/$uid/photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    await _db.storage.from('notes').uploadBinary(
+          path,
+          bytes,
+          fileOptions: const FileOptions(
+            contentType: 'image/jpeg',
+            upsert: true,
+          ),
+        );
+    return _db.storage.from('notes').getPublicUrl(path);
   }
 
   Future<void> updateCover(String uid, String coverUrl) async {

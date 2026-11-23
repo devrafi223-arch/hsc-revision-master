@@ -82,12 +82,14 @@ class CommunityMessage {
     this.poll,
     this.pinned = false,
     Map<String, int>? reactions,
+    Map<String, List<String>>? reactionUsers,
     List<String>? bookmarkedBy,
     this.flagged = false,
     this.flagReason,
     this.groupId,
     this.isAnonymous = false,
   })  : reactions = reactions ?? {},
+        reactionUsers = reactionUsers ?? {},
         bookmarkedBy = bookmarkedBy ?? [];
 
   final String id;
@@ -106,6 +108,12 @@ class CommunityMessage {
 
   /// emoji -> count.
   final Map<String, int> reactions;
+
+  /// emoji -> uids who reacted (new shape, one entry per user, so a
+  /// tap toggles instead of adding forever). Legacy rows store an int
+  /// count here with no owners; those show the count until the first
+  /// toggle, which migrates the emoji to this shape.
+  final Map<String, List<String>> reactionUsers;
 
   /// Uids of users who bookmarked this message.
   final List<String> bookmarkedBy;
@@ -137,6 +145,7 @@ class CommunityMessage {
         'poll': poll?.toMap(),
         'pinned': pinned,
         'reactions': reactions,
+        'reactionUsers': reactionUsers,
         'bookmarkedBy': bookmarkedBy,
         'flagged': flagged,
         'flagReason': flagReason,
@@ -163,9 +172,33 @@ class CommunityMessage {
     }
     final rawReactions = m['reactions'];
     final reactions = <String, int>{};
+    final reactionUsers = <String, List<String>>{};
     if (rawReactions is Map) {
       for (final entry in rawReactions.entries) {
-        reactions[entry.key.toString()] = (entry.value as num?)?.toInt() ?? 0;
+        final key = entry.key.toString();
+        final value = entry.value;
+        if (value is List) {
+          // New shape: the list IS the owners, so the count is its
+          // length and a tap can toggle this user.
+          final users = value.map((e) => e.toString()).toList();
+          reactions[key] = users.length;
+          reactionUsers[key] = users;
+        } else {
+          // Legacy shape: a bare int count with no owners.
+          reactions[key] = (value as num?)?.toInt() ?? 0;
+        }
+      }
+    }
+    // Offline-queue round-trip: toMap writes reactionUsers separately.
+    final rawUsers = m['reactionUsers'];
+    if (rawUsers is Map) {
+      for (final entry in rawUsers.entries) {
+        final key = entry.key.toString();
+        if (entry.value is List) {
+          final users = (entry.value as List).map((e) => e.toString()).toList();
+          reactionUsers[key] = users;
+          reactions[key] = users.length;
+        }
       }
     }
     final hasPoll = m['poll'] is Map || m['poll_id'] != null;
@@ -210,6 +243,7 @@ class CommunityMessage {
               : null,
       pinned: m['pinned'] == true,
       reactions: reactions,
+      reactionUsers: reactionUsers,
       bookmarkedBy: (m['bookmarkedBy'] as List?)
               ?.map((e) => e.toString())
               .toList() ??

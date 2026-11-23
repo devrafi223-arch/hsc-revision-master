@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../data/syllabus.dart';
 import '../main.dart';
@@ -6,6 +7,7 @@ import '../milestones.dart';
 import '../models/app_user.dart';
 import '../models/milestone.dart';
 import '../services/auth_service.dart';
+import '../services/supabase_init.dart';
 import '../services/user_repository.dart';
 import '../tracker_store.dart';
 import '../widgets/milestone_celebration.dart';
@@ -41,6 +43,50 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? get _uid => AuthService.instance.effectiveUid;
   bool get _isOwn => widget.userId == null || widget.userId == _uid;
   String? get _targetUid => widget.userId ?? _uid;
+
+  bool _photoBusy = false;
+
+  /// Picks a photo, uploads it to the public `notes` bucket and sets
+  /// it as this profile's photo (own profile only).
+  Future<void> _changePhoto() async {
+    final uid = _targetUid;
+    if (uid == null || _photoBusy) return;
+    if (!SupabaseInit.isOnlineMode) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You are offline — photo upload needs internet.'),
+        ),
+      );
+      return;
+    }
+    setState(() => _photoBusy = true);
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      final url =
+          await UserRepository.instance.uploadProfilePhoto(uid, bytes);
+      await UserRepository.instance.updatePhoto(uid, url);
+      if (mounted) setState(() {});
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Could not update photo. Check your connection and try again.',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _photoBusy = false);
+    }
+  }
 
   @override
   void initState() {
@@ -241,6 +287,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             following: false,
             onFollow: () {},
             onPrivacy: _updatePrivacy,
+            onChangePhoto: _changePhoto,
+            photoBusy: _photoBusy,
           );
         }
         if (_isOwn &&
@@ -314,6 +362,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           following: following,
           onFollow: () => _follow(user),
           onPrivacy: _updatePrivacy,
+          onChangePhoto: _changePhoto,
+          photoBusy: _photoBusy,
           restrictedView: !_isOwn && user.profileVisibility == 'restricted',
         );
       },
@@ -339,6 +389,8 @@ class _ProfileBody extends StatelessWidget {
     required this.following,
     required this.onFollow,
     required this.onPrivacy,
+    this.onChangePhoto,
+    this.photoBusy = false,
     this.restrictedView = false,
   });
 
@@ -356,6 +408,14 @@ class _ProfileBody extends StatelessWidget {
     String? profileVisibility,
     String? photoVisibility,
   }) onPrivacy;
+
+  /// Own profile only: opens the gallery to change the photo.
+  /// Null on other people's profiles (no button shown).
+  final VoidCallback? onChangePhoto;
+
+  /// True while a photo upload is in flight.
+  final bool photoBusy;
+
   final bool restrictedView;
 
   @override
@@ -400,8 +460,11 @@ class _ProfileBody extends StatelessWidget {
             children: [
               Transform.translate(
                 offset: const Offset(0, -32),
-                child: Container(
-                  width: 88,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      width: 88,
                   height: 88,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
@@ -434,6 +497,43 @@ class _ProfileBody extends StatelessWidget {
                           ),
                         )
                       : null,
+                    ),
+                    if (isOwn && onChangePhoto != null)
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: GestureDetector(
+                          onTap: photoBusy ? null : onChangePhoto,
+                          child: Container(
+                            width: 30,
+                            height: 30,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: JimColors.rose,
+                              border: Border.all(
+                                color: isDark
+                                    ? JimColors.darkBg
+                                    : JimColors.paper,
+                                width: 2,
+                              ),
+                            ),
+                            child: photoBusy
+                                ? const Padding(
+                                    padding: EdgeInsets.all(7),
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.camera_alt,
+                                    size: 15,
+                                    color: Colors.white,
+                                  ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
               Transform.translate(

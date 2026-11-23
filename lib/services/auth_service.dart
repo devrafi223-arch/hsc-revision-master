@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/app_user.dart';
-import 'admin_service.dart';
 import 'supabase_init.dart';
 import 'user_repository.dart';
 
@@ -142,13 +141,6 @@ class AuthService {
     );
     final user = response.user;
     if (user == null) throw Exception('Registration failed: no user.');
-    // Local admin fallback: the first user ever registered on this device
-    // becomes the admin until a real isAdmin flag is set in Supabase.
-    try {
-      await AdminService.recordFirstUser(user.id);
-    } catch (_) {
-      // Best effort only.
-    }
     // Best effort: create the profile row so the community can show it.
     try {
       await UserRepository.instance.saveUser(

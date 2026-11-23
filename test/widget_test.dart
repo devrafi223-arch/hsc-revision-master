@@ -215,17 +215,17 @@ void main() {
     await enterApp(tester);
 
     expect(find.byType(NavigationBar), findsOneWidget);
-    // The Today tab is a long list now (target + plan cards sit above
-    // Today's Focus), so scroll it into view before asserting.
+    // The Today tab is a long list now (the Motivation card sits above
+    // 'Your week'), so scroll it into view before asserting.
     // NOTE: the to-do input field owns its own Scrollable, so the
     // scrollable must be named explicitly here (the page ListView's
     // Scrollable is the first one in the tree).
     await tester.scrollUntilVisible(
-      find.textContaining("Today's Focus"),
+      find.text('Motivation'),
       200,
       scrollable: find.byType(Scrollable).first,
     );
-    expect(find.textContaining("Today's Focus"), findsOneWidget);
+    expect(find.text('Motivation'), findsOneWidget);
     await tester.tap(find.text('Community'));
     await tester.pumpAndSettle();
     // The Community tab has no AppBar of its own (the HomeScreen AppBar

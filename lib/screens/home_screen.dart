@@ -9,18 +9,14 @@ import '../data/syllabus.dart';
 import '../main.dart';
 import '../milestones.dart';
 import '../models/milestone.dart';
-import '../services/admin_service.dart';
-import '../services/auth_service.dart';
 import '../services/messaging_service.dart';
 import '../services/sync_service.dart';
-import '../target_plan.dart';
 import '../tracker_store.dart';
 import '../widgets/calendar_view.dart';
 import '../widgets/download_section.dart';
 import '../widgets/milestone_celebration.dart';
 import '../widgets/pomodoro_timer.dart';
 import '../widgets/weekly_chart.dart';
-import 'admin_screen.dart';
 import 'chapter_note_sheet.dart';
 import 'community_screen.dart';
 import 'groups_screen.dart';
@@ -37,7 +33,8 @@ const double _sectionGap = 24;
 const double _cardGap = 16;
 const double _cardPadding = 20;
 
-/// One motivation quote per weekday (Monday first).
+/// Motivational quotes for the home screen. The Motivation card
+/// starts on today's quote (day-of-year) and shuffles on tap.
 const List<String> _dailyQuotes = [
   'Small steps every day lead to big results.',
   'Revision is not repeating — it is remembering better.',
@@ -46,6 +43,13 @@ const List<String> _dailyQuotes = [
   'You do not have to be great to start, but you have to start to be great.',
   'Progress, not perfection.',
   'Rest is part of revision too — take your break.',
+  'Do not watch the clock. Do what it does — keep going.',
+  'A little progress each day adds up to big results.',
+  'The secret of getting ahead is getting started.',
+  'Focus is a matter of deciding what not to do.',
+  'Success is the sum of small efforts, repeated day in and day out.',
+  'It always seems impossible until it is done.',
+  'Your only limit is the story you keep telling yourself.',
 ];
 
 class HomeScreen extends StatefulWidget {
@@ -76,12 +80,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _toast;
   Timer? _toastTimer;
 
-  int _dailyTarget = 3;
   int _currentIndex = 0;
-  // NOTE: _dailyTarget is still the default pace for "Today's plan"
-  // when no target date is set. The target CARD itself is now a manual
-  // to-do list (below) — the old +/- chapter stepper is gone.
-  DateTime? _customTargetDate;
 
   /// Today's target as a manual to-do list (Rafi: the target is set by
   /// hand, as to-dos). Each entry: {'id', 'title', 'done'}. Stored in
@@ -89,7 +88,6 @@ class _HomeScreenState extends State<HomeScreen> {
   /// (online sync is a follow-up once the backend link is proven).
   List<Map<String, dynamic>> _todos = [];
   final Set<String> _milestonesShown = {};
-  bool _isAdmin = false;
 
   /// Local theme fallback, kept only as a safety net: main.dart now
   /// always passes the real [onToggleTheme] (signed-in and offline),
@@ -112,16 +110,12 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) setState(() => _loaded = true);
     });
     _loadPrefs();
-    _loadAdmin();
   }
 
   Future<void> _loadPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
-      _dailyTarget = prefs.getInt('daily-target') ?? 3;
-      final rawDate = prefs.getString('custom-target-date');
-      _customTargetDate = rawDate == null ? null : DateTime.tryParse(rawDate);
       _milestonesShown
         ..clear()
         ..addAll(prefs.getStringList('milestones-shown-v1') ?? []);
@@ -138,17 +132,6 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
     });
-  }
-
-  Future<void> _loadAdmin() async {
-    final uid = AuthService.instance.effectiveUid;
-    if (uid == null) return;
-    try {
-      final admin = await AdminService.instance.isAdmin(uid);
-      if (mounted) setState(() => _isAdmin = admin);
-    } catch (_) {
-      // Not an admin, or offline — the admin row simply stays hidden.
-    }
   }
 
   @override
@@ -204,25 +187,6 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {
       // A milestone must never break stage toggling.
     }
-  }
-
-  Future<void> _pickCustomDate() async {
-    final now = DateTime.now();
-    final initial = _customTargetDate ?? now.add(const Duration(days: 90));
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: initial,
-      firstDate: DateTime(now.year, now.month, now.day),
-      lastDate: now.add(const Duration(days: 730)),
-    );
-    if (picked == null) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      'custom-target-date',
-      picked.toIso8601String(),
-    );
-    setState(() => _customTargetDate = picked);
-    _showMessage('Target date saved.');
   }
 
   Future<void> _saveTodos() async {
@@ -284,12 +248,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void _openGroups() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const GroupsScreen()),
-    );
-  }
-
-  void _openAdmin() {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const AdminScreen()),
     );
   }
 
@@ -367,48 +325,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final pct =
         totalMilestones == 0 ? 0 : (done * 100 / totalMilestones).round();
     final weakest = _store.weakestSubject(allChapterRefs);
-    final today = DateTime.now();
-
-    final remainingRefs = allChapterRefs
-        .where((r) => _store.doneForChapter(r.chapter.id) < 6)
-        .toList();
-    final remainingIds = remainingRefs.map((r) => r.chapter.id).toList();
-    final daysLeft = _customTargetDate == null
-        ? null
-        : DailyPlan.daysLeft(
-            targetDate: _customTargetDate!,
-            today: today,
-          );
-    final perDay = _customTargetDate == null
-        ? _dailyTarget
-        : DailyPlan.chaptersPerDay(
-            remainingChapters: remainingRefs.length,
-            targetDate: _customTargetDate!,
-            today: today,
-          );
-    final planIds = DailyPlan.planForToday(
-      remainingChapterIds: remainingIds,
-      perDay: perDay,
-    );
-    final planTitles = planIds.map((id) {
-      final ref = allChapterRefs.where((r) => r.chapter.id == id);
-      return ref.isEmpty
-          ? id
-          : '${ref.first.chapter.title} · ${ref.first.subject.nameEn}';
-    }).toList();
-
-    // Spaced revision: the 5 chapters with the lowest stage completion.
-    final reviseRefs = [...allChapterRefs]..sort(
-        (a, b) => _store
-            .doneForChapter(a.chapter.id)
-            .compareTo(_store.doneForChapter(b.chapter.id)),
-      );
-    final reviseTop5 = reviseRefs
-        .where((r) => _store.doneForChapter(r.chapter.id) < 6)
-        .take(5)
-        .toList();
-
-    final quote = _dailyQuotes[(today.weekday - 1) % _dailyQuotes.length];
 
     return Scaffold(
       appBar: AppBar(
@@ -485,19 +401,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               onAddTodo: _addTodo,
                               onToggleTodo: _toggleTodo,
                               onRemoveTodo: _removeTodo,
-                              customTargetDate: _customTargetDate,
-                              daysLeft: daysLeft,
-                              perDay: perDay,
-                              planTitles: planTitles,
-                              reviseRefs: reviseTop5,
                               milestones: _earnedMilestones(),
-                              quote: quote,
-                              isAdmin: _isAdmin,
-                              onPickCustomDate: _pickCustomDate,
                               onToggleStage: _toggleStage,
                               onOpenSettings: _openSettings,
                               onOpenGroups: _openGroups,
-                              onOpenAdmin: _openAdmin,
                             ),
                             _AllTab(
                               store: _store,
@@ -944,6 +851,83 @@ class _TodayTargetCardState extends State<_TodayTargetCard> {
   }
 }
 
+/// Motivational quotes (Rafi: quotes on the home screen, in place of
+/// the Today's plan / Today's Focus / Revise again cards). Starts on
+/// today's quote and shuffles to another one on tap.
+class _MotivationCard extends StatefulWidget {
+  const _MotivationCard();
+
+  @override
+  State<_MotivationCard> createState() => _MotivationCardState();
+}
+
+class _MotivationCardState extends State<_MotivationCard> {
+  late int _index = _todayIndex();
+
+  static int _todayIndex() {
+    final now = DateTime.now();
+    final dayOfYear = now.difference(DateTime(now.year, 1, 1)).inDays;
+    return dayOfYear % _dailyQuotes.length;
+  }
+
+  void _shuffle() {
+    setState(() {
+      var next = _index;
+      while (next == _index && _dailyQuotes.length > 1) {
+        next = math.Random().nextInt(_dailyQuotes.length);
+      }
+      _index = next;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
+    final muted = isDark ? JimColors.darkMuted : JimColors.muted;
+    return _JimCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.format_quote,
+                size: 22,
+                color: JimColors.rose,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Motivation',
+                style: base.copyWith(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              IconButton(
+                onPressed: _shuffle,
+                icon: const Icon(Icons.refresh, size: 20),
+                color: muted,
+                tooltip: 'Another quote',
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _dailyQuotes[_index],
+            style: base.copyWith(
+              fontSize: 16,
+              height: 1.5,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _TodayTab extends StatelessWidget {
   const _TodayTab({
     required this.store,
@@ -957,19 +941,10 @@ class _TodayTab extends StatelessWidget {
     required this.onAddTodo,
     required this.onToggleTodo,
     required this.onRemoveTodo,
-    required this.customTargetDate,
-    required this.daysLeft,
-    required this.perDay,
-    required this.planTitles,
-    required this.reviseRefs,
     required this.milestones,
-    required this.quote,
-    required this.isAdmin,
-    required this.onPickCustomDate,
     required this.onToggleStage,
     required this.onOpenSettings,
     required this.onOpenGroups,
-    required this.onOpenAdmin,
   });
 
   final TrackerStore store;
@@ -981,21 +956,12 @@ class _TodayTab extends StatelessWidget {
   final ValueChanged<String> onAddTodo;
   final ValueChanged<String> onToggleTodo;
   final ValueChanged<String> onRemoveTodo;
-  final DateTime? customTargetDate;
-  final int? daysLeft;
-  final int perDay;
-  final List<String> planTitles;
-  final List<ChapterRef> reviseRefs;
   final List<Milestone> milestones;
-  final String quote;
-  final bool isAdmin;
-  final VoidCallback onPickCustomDate;
   final Future<void> Function(String, String) onToggleStage;
-  final VoidCallback onOpenSettings, onOpenGroups, onOpenAdmin;
+  final VoidCallback onOpenSettings, onOpenGroups;
 
   @override
   Widget build(BuildContext context) {
-    final pending = store.pendingChapters(allChapterRefs).take(5).toList();
     final base = Theme.of(context).textTheme.bodyMedium!;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
@@ -1017,168 +983,7 @@ class _TodayTab extends StatelessWidget {
           onToggleTodo: onToggleTodo,
           onRemoveTodo: onRemoveTodo,
         ),
-        _JimCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Today’s plan',
-                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                customTargetDate == null
-                    ? 'Set a target date and the remaining chapters spread evenly over the days left.'
-                    : '${daysLeft ?? 0} days left · $perDay chapter${perDay == 1 ? '' : 's'} a day',
-                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
-              ),
-              const SizedBox(height: 16),
-              if (planTitles.isEmpty)
-                Text(
-                  'All 151 chapters are finished — re-test finished chapters after a 2–3 day gap.',
-                  style: base.copyWith(fontSize: 15, height: 1.45),
-                )
-              else
-                ...planTitles.map(
-                  (title) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          width: 6,
-                          height: 6,
-                          margin: const EdgeInsets.only(top: 7),
-                          decoration: const BoxDecoration(
-                            color: JimColors.rose,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            title,
-                            style: base.copyWith(fontSize: 15, height: 1.45),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 12),
-              TextButton(
-                key: const Key('pick-target-date'),
-                onPressed: onPickCustomDate,
-                child: Text(
-                  customTargetDate == null
-                      ? 'Set target date'
-                      : 'Change target date',
-                ),
-              ),
-            ],
-          ),
-        ),
-        _JimCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                "Today's Focus",
-                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Next 5 pending chapters',
-                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
-              ),
-              const SizedBox(height: 16),
-              if (pending.isEmpty)
-                Text(
-                  'All 906 milestones done — re-test finished chapters after a 2–3 day gap.',
-                  style: base.copyWith(fontSize: 15, height: 1.45),
-                )
-              else
-                ...pending.map(
-                  (ref) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          width: 6,
-                          height: 6,
-                          margin: const EdgeInsets.only(top: 7),
-                          decoration: const BoxDecoration(
-                            color: JimColors.rose,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            '${ref.chapter.title} · ${ref.subject.nameEn}',
-                            style: base.copyWith(fontSize: 15, height: 1.45),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 12),
-              Text(
-                'How to finish a chapter: Archive, then Note, then Recall from memory, then a timed MCQ, then Live class, then a Test paper alone.',
-                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
-              ),
-            ],
-          ),
-        ),
-        _JimCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Revise again',
-                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Your weakest chapters — spaced revision, lowest stage completion first.',
-                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
-              ),
-              const SizedBox(height: 16),
-              if (reviseRefs.isEmpty)
-                Text(
-                  'Nothing to revise — every chapter is finished.',
-                  style: base.copyWith(fontSize: 15, height: 1.45),
-                )
-              else
-                ...reviseRefs.map(
-                  (ref) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '${ref.chapter.title} · ${ref.subject.nameEn}',
-                            style: base.copyWith(fontSize: 15, height: 1.45),
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Text(
-                          '${store.doneForChapter(ref.chapter.id)}/6',
-                          style: base.copyWith(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: muted,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
+        const _MotivationCard(),
         _JimCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1212,26 +1017,6 @@ class _TodayTab extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               MilestoneList(milestones: milestones),
-            ],
-          ),
-        ),
-        _JimCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'For today',
-                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                quote,
-                style: base.copyWith(
-                  fontSize: 15,
-                  height: 1.45,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
             ],
           ),
         ),
@@ -1270,14 +1055,6 @@ class _TodayTab extends StatelessWidget {
                 label: 'Groups',
                 onTap: onOpenGroups,
               ),
-              if (isAdmin) ...[
-                Container(height: 1, color: line),
-                _MoreRow(
-                  icon: Icons.shield,
-                  label: 'Admin panel',
-                  onTap: onOpenAdmin,
-                ),
-              ],
             ],
           ),
         ),

@@ -1,20 +1,22 @@
 import 'dart:async';
 
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'supabase_init.dart';
 
 /// Admin panel backend. Supabase tables: `users`, `messages`, `reports`.
 ///
-/// Who is an admin?
-///   1. The Supabase user row has `is_admin == true`, OR
-///   2. (LOCAL FALLBACK) the uid matches the first user ever registered on
-///      this device, stored in SharedPreferences under 'first-user-uid'.
-///      The first user to register on a fresh install becomes the admin
-///      until a real `is_admin` flag is set in Supabase — Rafi should set
-///      `is_admin: true` on his own user row in the Supabase dashboard and
-///      then this fallback no longer matters.
+/// Who is an admin? ONLY a Supabase `users` row with `is_admin == true`,
+/// checked against the signed-in Auth uid. There is deliberately NO
+/// local/device fallback: the old "first launch on a device becomes
+/// the admin" fallback is removed (Rafi, 2026-11-24) — the panel is
+/// securely locked and lives only at the web `/admin` route, behind an
+/// email + password sign-in. Rafi creates the admin Auth user in the
+/// Supabase dashboard and sets `is_admin: true` on its `users` row.
+///
+/// Honest limit: the tables' RLS is still test-only allow-all, so this
+/// lock secures the panel UI, not the raw data — proper RLS is still
+/// owed before public launch.
 ///
 /// All counts are best effort; everything returns 0 / empty in local mode
 /// and never throws.
@@ -25,30 +27,20 @@ class AdminService {
 
   SupabaseClient get _db => SupabaseInit.client;
 
-  /// Records [uid] as the first registered user on this device, if none
-  /// is recorded yet. Called by the registration flow (see AuthService).
-  static Future<void> recordFirstUser(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getString('first-user-uid') == null) {
-      await prefs.setString('first-user-uid', uid);
-    }
-  }
-
+  /// Strict admin check: the `users` row for [uid] must have
+  /// `is_admin == true`. No local fallback, ever.
   Future<bool> isAdmin(String uid) async {
-    if (SupabaseInit.isOnlineMode) {
-      try {
-        final row = await _db
-            .from('users')
-            .select('is_admin')
-            .eq('id', uid)
-            .maybeSingle();
-        if (row?['is_admin'] == true) return true;
-      } catch (_) {
-        // Fall through to the local fallback below.
-      }
+    if (!SupabaseInit.isOnlineMode) return false;
+    try {
+      final row = await _db
+          .from('users')
+          .select('is_admin')
+          .eq('id', uid)
+          .maybeSingle();
+      return row?['is_admin'] == true;
+    } catch (_) {
+      return false;
     }
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('first-user-uid') == uid;
   }
 
   /// Counts one table exactly (best effort, 0 on any error).
