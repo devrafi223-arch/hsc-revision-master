@@ -92,7 +92,7 @@ community, groups, leaderboard, cloud sync and push notifications do not.
 
 | Works offline (no setup) | Needs Firebase config |
 |---|---|
-| Tracker progress (151 chapters / 906 milestones) | Email + OTP registration, Google sign-in |
+| Tracker progress (151 chapters / 906 milestones) | Email + password registration, Google sign-in |
 | Per-chapter notes (text + photo, on-device) | Universal community, polls, voice messages |
 | Milestones + badges, streak, daily target plan | Leaderboard, follow, profiles, cover photo |
 | Offline queue — work done offline auto-syncs later | Groups (6-char join codes), admin panel, FCM |
@@ -101,19 +101,20 @@ community, groups, leaderboard, cloud sync and push notifications do not.
 
 1. Go to https://console.firebase.google.com and create a project
    (any name, e.g. `hsc-revision-master`).
-2. **Add an Android app**: package name `com.example.hsc_revision_master`
-   (or your own id — it must match `android/app/build.gradle.kts`).
+2. **Add an Android app**: package name `com.rafi.hscrevise`
+   (it must match `android/app/build.gradle.kts`).
    Download `google-services.json` into `android/app/`.
 3. **Add a Web app** in the same project. Copy the config values it shows
    (`apiKey`, `appId`, `messagingSenderId`, `projectId`, `storageBucket`)
-   into `lib/firebase_options.dart`, replacing every
-   `TODO — replace with real Firebase project config` value.
+   into `lib/firebase_options.dart`, replacing the `TODO-WEB-APP-ID` value
+   in the `web` options. (Android is already wired: project
+   `massenger-b9169`, package `com.rafi.hscrevise`.)
    (Or run `flutterfire configure` to regenerate that file.)
 4. **Authentication**: in the Firebase console → Authentication →
    Sign-in method → enable **Email/Password** and **Google**.
 5. **Firestore**: console → Firestore Database → Create database
    (production mode; the app creates collections `users`, `messages`,
-   `notes`, `groups`, `reports`, `email_otps` itself).
+   `notes`, `groups`, `reports` itself).
 6. **Storage**: console → Storage → Get started (default bucket).
    The app uploads to `community/...` and `notes/<uid>/<chapterId>.jpg`.
 7. **FCM**: console → Cloud Messaging — no extra step for Android;
@@ -131,14 +132,10 @@ document in Firestore collection `users` in the console.
 
 ### Known TODOs / honest limits
 
-- **OTP email sending is NOT implemented**: `AuthService.sendOtp` only
-  stores a SHA-256 hash + 10-minute expiry in Firestore collection
-  `email_otps`. Firebase Auth cannot send a custom OTP email, so a backend
-  (Cloud Function / small server + SMTP) is needed to actually email the
-  code. In local-only mode the plain code is stored under
-  `demo-otp-<email>` in SharedPreferences so the UI can show it labelled
-  "demo code (no email configured)" — in online mode the code is never
-  shown anywhere.
+- **No OTP system**: registration is email + password only, plus Google
+  Sign-In. The earlier OTP code (`sendOtp` / `verifyOtp`, Firestore
+  collection `email_otps`, `crypto` dependency) was removed entirely —
+  there is no email code to send and no code screen.
 - **Voice recording is a stub**: `VoiceService` returns null until the
   `record` + `just_audio` packages are added (kept out to keep the build
   light). The UI shows "voice recording coming soon" — nothing is faked.
