@@ -86,7 +86,7 @@ class _OtpScreenState extends State<OtpScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      await _showError(e.toString());
+      await _showError(AuthService.friendlyError(e));
     }
   }
 
@@ -111,7 +111,7 @@ class _OtpScreenState extends State<OtpScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      await _showError(e.toString());
+      await _showError(AuthService.friendlyError(e));
     }
   }
 

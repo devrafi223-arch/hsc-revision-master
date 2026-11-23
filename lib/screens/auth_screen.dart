@@ -68,7 +68,7 @@ class _ForgotPasswordDialogState extends State<_ForgotPasswordDialog> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = e.toString();
+        _error = AuthService.friendlyError(e);
       });
     }
   }
@@ -233,7 +233,7 @@ class _AuthFormState extends State<_AuthForm> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      await _showError(e.toString());
+      await _showError(AuthService.friendlyError(e));
     }
   }
 
@@ -266,7 +266,7 @@ class _AuthFormState extends State<_AuthForm> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      await _showError(e.toString());
+      await _showError(AuthService.friendlyError(e));
     }
   }
 

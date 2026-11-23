@@ -36,11 +36,15 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
-      - run: flutter build apk --release
+      # Split per ABI: the fat APK was 57 MB (three copies of
+      # libflutter.so + libapp.so, one per ABI). Per-ABI APKs are
+      # ~20 MB each — arm64 is the one Rafi's phone needs, and under
+      # Telegram's 50 MB bot-upload limit too.
+      - run: flutter build apk --release --split-per-abi
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: build/app/outputs/flutter-apk/app-*-release.apk
 
   web:
     name: Web

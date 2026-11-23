@@ -80,7 +80,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       setState(() => _busy = false);
       await _showMessage(
         title: 'Something went wrong',
-        message: e.toString(),
+        message: AuthService.friendlyError(e),
       );
     }
   }

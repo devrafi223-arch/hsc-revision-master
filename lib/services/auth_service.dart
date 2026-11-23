@@ -242,4 +242,44 @@ class AuthService {
       UserAttributes(password: newPassword),
     );
   }
+
+  /// Human-readable auth error: network/DNS failures become a plain
+  /// "check your internet" message instead of the raw exception dump
+  /// (which users cannot act on — e.g. the phone failing to resolve
+  /// the Supabase host showed a full AuthRetryableFetchException /
+  /// SocketException wall of text). Other known failures get a plain
+  /// sentence too; anything else keeps its message minus the
+  /// "Exception: " prefix.
+  static String friendlyError(Object e) {
+    final text = e.toString();
+    if (text.contains('SocketException') ||
+        text.contains('Failed host lookup') ||
+        text.contains('Connection refused') ||
+        text.contains('Network is unreachable') ||
+        text.contains('Connection reset') ||
+        text.contains('AuthRetryableFetchException') ||
+        text.contains('ClientException')) {
+      return 'No internet connection — check your Wi-Fi or mobile data and try again.';
+    }
+    if (text.contains('Invalid login credentials')) {
+      return 'Wrong email or password. Try again.';
+    }
+    if (text.contains('User already registered')) {
+      return 'This email already has an account — log in instead.';
+    }
+    if (text.contains('Password should be at least 6 characters')) {
+      return 'Password must be at least 6 characters.';
+    }
+    if (text.contains('Email not confirmed')) {
+      return 'Your email is not confirmed yet — check your inbox for the code.';
+    }
+    if (text.contains('otp_expired') || text.contains('Token has expired')) {
+      return 'The code has expired — tap Resend for a new one.';
+    }
+    if (text.contains('over_email_send_rate_limit') ||
+        text.contains('Email rate limit exceeded')) {
+      return 'Too many emails sent — wait a few minutes and try again.';
+    }
+    return text.replaceFirst(RegExp(r'^Exception: '), '');
+  }
 }
