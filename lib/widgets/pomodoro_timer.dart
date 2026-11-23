@@ -1,11 +1,12 @@
 import 'dart:async';
 
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
-/// 25-minute Pomodoro countdown, Cupertino style. [initialDuration] exists
+/// 25-minute Pomodoro countdown, Material style. [initialDuration] exists
 /// so widget tests can use a short timer instead of waiting 25 minutes.
 class PomodoroTimer extends StatefulWidget {
-  const PomodoroTimer({super.key, this.initialDuration = const Duration(minutes: 25)});
+  const PomodoroTimer(
+      {super.key, this.initialDuration = const Duration(minutes: 25)});
 
   final Duration initialDuration;
 
@@ -62,14 +63,16 @@ class _PomodoroTimerState extends State<PomodoroTimer> {
   }
 
   String get _label {
-    final minutes = _remaining.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = _remaining.inSeconds.remainder(60).toString().padLeft(2, '0');
+    final minutes =
+        _remaining.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds =
+        _remaining.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$minutes:$seconds';
   }
 
   @override
   Widget build(BuildContext context) {
-    final textStyle = CupertinoTheme.of(context).textTheme.textStyle;
+    final textStyle = Theme.of(context).textTheme.bodyMedium!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -102,20 +105,28 @@ class _PomodoroTimerState extends State<PomodoroTimer> {
         Wrap(
           spacing: 8,
           children: [
-            CupertinoButton.filled(
+            FilledButton(
               key: const Key('pomodoro-start'),
-              minimumSize: const Size(48, 48),
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              borderRadius: BorderRadius.circular(14),
               onPressed: _running ? _pause : _start,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(48, 48),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
               child: Text(_running ? 'Pause' : 'Start'),
             ),
-            CupertinoButton(
+            OutlinedButton(
               key: const Key('pomodoro-reset'),
-              minimumSize: const Size(48, 48),
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              borderRadius: BorderRadius.circular(14),
               onPressed: _reset,
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(48, 48),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
               child: const Text('Reset'),
             ),
           ],

@@ -26,7 +26,30 @@ void main() {
     client.close();
   });
 
-  test('a context trusting a NON-pinned root fails the handshake '
+  test(
+      'installing overrides first, then building the pinned client, '
+      'does not recurse (regression: Stack Overflow on Windows)', () {
+    // Production order in SupabaseInit.initialize(): install the
+    // overrides, then buildPinnedHttpClient(). The old override called
+    // the HttpClient factory inside createHttpClient — the factory
+    // consults HttpOverrides.global (itself) and recursed until
+    // StackOverflowError, killing every init on Windows (2026-11-23).
+    installPinnedHttpOverrides();
+    try {
+      final client = buildPinnedHttpClient();
+      expect(client, isNotNull);
+      client.close();
+      // A plain HttpClient() must also come back pinned, not recurse.
+      final plain = HttpClient();
+      expect(plain, isNotNull);
+      plain.close();
+    } finally {
+      HttpOverrides.global = null;
+    }
+  });
+
+  test(
+      'a context trusting a NON-pinned root fails the handshake '
       '(fail-closed)', () async {
     // Negative control: a context trusting ONLY ISRG Root X1 (a real,
     // valid root — just not one of our pins) must fail to verify the

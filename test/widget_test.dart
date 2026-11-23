@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -22,11 +22,8 @@ class _TestAppState extends State<_TestApp> {
 
   @override
   Widget build(BuildContext context) {
-    return CupertinoApp(
-      theme: CupertinoThemeData(
-        brightness: _dark ? Brightness.dark : Brightness.light,
-        scaffoldBackgroundColor: _dark ? JimColors.darkBg : JimColors.paper,
-      ),
+    return MaterialApp(
+      theme: jimTheme(dark: _dark),
       home: HomeScreen(
         dark: _dark,
         onToggleTheme: () => setState(() => _dark = !_dark),
@@ -50,7 +47,8 @@ void main() {
     expect(ids.toSet().length, 151, reason: 'no duplicate chapter IDs');
   });
 
-  testWidgets('stage chip tap toggles a chapter from 0/6 to 1/6', (tester) async {
+  testWidgets('stage chip tap toggles a chapter from 0/6 to 1/6',
+      (tester) async {
     SharedPreferences.setMockInitialValues({});
     await enterApp(tester);
 
@@ -88,7 +86,8 @@ void main() {
     expect(find.text('Showing 2 of 151 chapters'), findsOneWidget);
   });
 
-  testWidgets('paper segmented control filters to 1st-paper chapters', (tester) async {
+  testWidgets('paper segmented control filters to 1st-paper chapters',
+      (tester) async {
     SharedPreferences.setMockInitialValues({});
     await enterApp(tester);
 
@@ -106,10 +105,10 @@ void main() {
     await enterApp(tester);
 
     final switchFinder = find.byKey(const Key('theme-toggle'));
-    expect(tester.widget<CupertinoSwitch>(switchFinder).value, isFalse);
+    expect(tester.widget<Switch>(switchFinder).value, isFalse);
     await tester.tap(switchFinder);
     await tester.pumpAndSettle();
-    expect(tester.widget<CupertinoSwitch>(switchFinder).value, isTrue);
+    expect(tester.widget<Switch>(switchFinder).value, isTrue);
   });
 
   testWidgets('Today target to-do: add, tick off, delete', (tester) async {
@@ -129,15 +128,15 @@ void main() {
     expect(find.text('Revise Physics Ch 3'), findsOneWidget);
     expect(find.text('0/1 done'), findsOneWidget);
 
-    await tester.ensureVisible(find.byIcon(CupertinoIcons.circle).first);
+    await tester.ensureVisible(find.byIcon(Icons.radio_button_unchecked).first);
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(CupertinoIcons.circle).first);
+    await tester.tap(find.byIcon(Icons.radio_button_unchecked).first);
     await tester.pumpAndSettle();
     expect(find.text('1/1 done'), findsOneWidget);
 
-    await tester.ensureVisible(find.byIcon(CupertinoIcons.delete).first);
+    await tester.ensureVisible(find.byIcon(Icons.delete).first);
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(CupertinoIcons.delete).first);
+    await tester.tap(find.byIcon(Icons.delete).first);
     await tester.pumpAndSettle();
     expect(find.text('Revise Physics Ch 3'), findsNothing);
   });
@@ -153,25 +152,30 @@ void main() {
       find.text('Reset all progress'),
       200,
     );
+    // scrollUntilVisible stops as soon as any part of the row is on
+    // screen — the row can end up straddling the bottom edge, so bring
+    // it fully into view before tapping its centre.
+    await tester.ensureVisible(find.text('Reset all progress'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Reset all progress'));
     await tester.pumpAndSettle();
 
     expect(find.text('Reset all progress?'), findsOneWidget);
-    final resetButton = find.widgetWithText(CupertinoDialogAction, 'Reset');
-    expect(tester.widget<CupertinoDialogAction>(resetButton).onPressed,
-        isNull);
+    final resetButton = find.widgetWithText(TextButton, 'Reset');
+    expect(tester.widget<TextButton>(resetButton).onPressed, isNull);
 
-    await tester.enterText(find.byType(CupertinoTextField), 'Confirm');
+    await tester.enterText(find.byType(TextField), 'Confirm');
     await tester.pump();
-    expect(tester.widget<CupertinoDialogAction>(resetButton).onPressed,
-        isNotNull);
+    expect(tester.widget<TextButton>(resetButton).onPressed, isNotNull);
   });
 
-  testWidgets('Cupertino tab bar switches between Today, All, Community and Profile', (tester) async {
+  testWidgets(
+      'Material navigation bar switches between Today, All, Community and Profile',
+      (tester) async {
     SharedPreferences.setMockInitialValues({});
     await enterApp(tester);
 
-    expect(find.byType(CupertinoTabBar), findsOneWidget);
+    expect(find.byType(NavigationBar), findsOneWidget);
     // The Today tab is a long list now (target + plan cards sit above
     // Today's Focus), so scroll it into view before asserting.
     // NOTE: the to-do input field owns its own Scrollable, so the
@@ -185,7 +189,10 @@ void main() {
     expect(find.textContaining("Today's Focus"), findsOneWidget);
     await tester.tap(find.text('Community'));
     await tester.pumpAndSettle();
-    expect(find.text('Community'), findsWidgets);
+    // The Community tab has no AppBar of its own (the HomeScreen AppBar
+    // stays on top), so 'Community' appears exactly once — the
+    // NavigationBar destination label.
+    expect(find.text('Community'), findsOneWidget);
     await tester.tap(find.text('Profile'));
     await tester.pumpAndSettle();
     expect(find.text('You are not signed in.'), findsOneWidget);
@@ -196,9 +203,10 @@ void main() {
 
   testWidgets('Pomodoro start counts down and pause stops it', (tester) async {
     await tester.pumpWidget(
-      const CupertinoApp(
-        home: CupertinoPageScaffold(
-          child: Center(child: PomodoroTimer(initialDuration: Duration(seconds: 3))),
+      const MaterialApp(
+        home: Scaffold(
+          body: Center(
+              child: PomodoroTimer(initialDuration: Duration(seconds: 3))),
         ),
       ),
     );

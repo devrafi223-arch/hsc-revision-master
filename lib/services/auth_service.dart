@@ -8,20 +8,29 @@ import 'user_repository.dart';
 
 /// Email + password + Google sign-in, backed by Supabase Auth.
 ///
-/// Every method throws
-/// `Exception('Online features need Supabase setup — replace
-/// lib/supabase_config.dart with your real project values.')`
-/// while [SupabaseInit.isOnlineMode] is false. There is no OTP system:
-/// registration is email + password only (plus Google Sign-In via
-/// Supabase Auth's built-in OAuth — no google_sign_in package).
+/// Every method throws while [SupabaseInit.isOnlineMode] is false.
+/// The message names the REAL init failure (SupabaseInit.lastError),
+/// not the config placeholder — the old static text blamed
+/// supabase_config.dart even when the config was fine and the init
+/// itself had crashed (e.g. the StackOverflowError, 2026-11-23).
+/// There is no OTP system: registration is email + password only
+/// (plus Google Sign-In via Supabase Auth's built-in OAuth — no
+/// google_sign_in package).
 class AuthService {
   AuthService._();
 
   static final AuthService instance = AuthService._();
 
-  static const String _onlineError =
-      'Online features need Supabase setup — replace '
-      'lib/supabase_config.dart with your real project values.';
+  /// The real reason online is unavailable: the init failure when
+  /// there is one, otherwise the missing-config hint.
+  static String get _onlineError {
+    final cause = SupabaseInit.lastError;
+    if (cause != null && cause.isNotEmpty) {
+      return 'Online features unavailable: $cause';
+    }
+    return 'Online features need Supabase setup — replace '
+        'lib/supabase_config.dart with your real project values.';
+  }
 
   SupabaseClient get _auth => SupabaseInit.client;
 

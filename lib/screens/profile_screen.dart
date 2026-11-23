@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 import '../data/syllabus.dart';
 import '../main.dart';
@@ -18,9 +18,14 @@ import 'auth_screen.dart';
 /// - restricted + not yours -> name + overall progress % only
 /// - public (or yours) -> full details.
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key, this.userId});
+  const ProfileScreen({super.key, this.userId, this.showAppBar = true});
 
   final String? userId;
+
+  /// False when embedded as a tab (the HomeScreen AppBar + NavigationBar
+  /// already wrap it); true when pushed on its own (e.g. from the
+  /// community leaderboard), where it needs its own AppBar + back button.
+  final bool showAppBar;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -34,8 +39,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _photoVisibility = 'all';
 
   String? get _uid => AuthService.instance.currentUid;
-  bool get _isOwn =>
-      widget.userId == null || widget.userId == _uid;
+  bool get _isOwn => widget.userId == null || widget.userId == _uid;
   String? get _targetUid => widget.userId ?? _uid;
 
   @override
@@ -114,13 +118,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _showInfo(String message) async {
     if (!mounted) return;
-    await showCupertinoDialog<void>(
+    await showDialog<void>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      builder: (context) => AlertDialog(
         content: Text(message),
         actions: [
-          CupertinoDialogAction(
-            isDefaultAction: true,
+          TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('OK'),
           ),
@@ -153,173 +156,172 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final targetUid = _targetUid;
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     if (targetUid == null) {
-      return CupertinoPageScaffold(
-        navigationBar: const CupertinoNavigationBar(
-          middle: Text('Profile'),
-        ),
-        child: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
-            children: [
-              Text(
-                'You are not signed in.',
-                style: base.copyWith(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Sign in to sync your progress, join the community and be seen on the leaderboard.',
-                style: base.copyWith(fontSize: 15, color: muted, height: 1.45),
-              ),
-              const SizedBox(height: 20),
-              CupertinoButton.filled(
-                borderRadius: BorderRadius.circular(14),
-                onPressed: () {
-                  Navigator.of(context).push(
-                    CupertinoPageRoute(
-                      builder: (_) => const AuthScreen(),
-                    ),
-                  );
-                },
-                child: const Text('Sign in / Register'),
-              ),
-            ],
+      final body = ListView(
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+        children: [
+          Text(
+            'You are not signed in.',
+            style: base.copyWith(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-        ),
+          const SizedBox(height: 8),
+          Text(
+            'Sign in to sync your progress, join the community and be seen on the leaderboard.',
+            style: base.copyWith(fontSize: 15, color: muted, height: 1.45),
+          ),
+          const SizedBox(height: 20),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const AuthScreen(),
+                ),
+              );
+            },
+            style: FilledButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+            child: const Text('Sign in / Register'),
+          ),
+        ],
+      );
+      if (!widget.showAppBar) return body;
+      return Scaffold(
+        appBar: AppBar(title: const Text('Profile')),
+        body: SafeArea(child: body),
       );
     }
-    return CupertinoPageScaffold(
-      navigationBar: const CupertinoNavigationBar(
-        middle: Text('Profile'),
-      ),
-      child: SafeArea(
-        child: StreamBuilder<AppUser?>(
-          stream: UserRepository.instance.userStream(targetUid),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData && snapshot.connectionState ==
-                ConnectionState.waiting) {
-              return const Center(child: CupertinoActivityIndicator());
-            }
-            final user = snapshot.data;
-            if (user == null) {
-              // No profile doc yet (e.g. signed in but never saved):
-              // fall back to the local tracker for your own profile.
-              if (!_isOwn) {
-                return Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      'Profile not found.',
-                      style: base.copyWith(
-                        fontSize: 15,
-                        color: muted,
-                        height: 1.45,
-                      ),
-                    ),
+    final content = StreamBuilder<AppUser?>(
+      stream: UserRepository.instance.userStream(targetUid),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData &&
+            snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final user = snapshot.data;
+        if (user == null) {
+          // No profile doc yet (e.g. signed in but never saved):
+          // fall back to the local tracker for your own profile.
+          if (!_isOwn) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  'Profile not found.',
+                  style: base.copyWith(
+                    fontSize: 15,
+                    color: muted,
+                    height: 1.45,
                   ),
-                );
-              }
-              return _ProfileBody(
-                user: AppUser(
-                  id: targetUid,
-                  name: 'Student',
-                  email: '',
                 ),
-                isOwn: true,
-                storeLoaded: _storeLoaded,
-                store: _store,
-                subjectPct: _subjectPct,
-                earnedMilestones: _earnedMilestones(),
-                privacy: _privacy,
-                photoVisibility: _photoVisibility,
-                following: false,
-                onFollow: () {},
-                onPrivacy: _updatePrivacy,
-              );
-            }
-            if (_isOwn &&
-                _privacy == 'public' &&
-                user.profileVisibility != _privacy) {
-              // First load: reflect the stored privacy in the controls.
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) {
-                  setState(() {
-                    _privacy = user.profileVisibility;
-                    _photoVisibility = user.photoVisibility;
-                  });
-                }
+              ),
+            );
+          }
+          return _ProfileBody(
+            user: AppUser(
+              id: targetUid,
+              name: 'Student',
+              email: '',
+            ),
+            isOwn: true,
+            storeLoaded: _storeLoaded,
+            store: _store,
+            subjectPct: _subjectPct,
+            earnedMilestones: _earnedMilestones(),
+            privacy: _privacy,
+            photoVisibility: _photoVisibility,
+            following: false,
+            onFollow: () {},
+            onPrivacy: _updatePrivacy,
+          );
+        }
+        if (_isOwn &&
+            _privacy == 'public' &&
+            user.profileVisibility != _privacy) {
+          // First load: reflect the stored privacy in the controls.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              setState(() {
+                _privacy = user.profileVisibility;
+                _photoVisibility = user.photoVisibility;
               });
             }
-            final following = _ownUser?.followingIds.contains(user.id) ??
-                false;
-            if (!_isOwn &&
-                user.profileVisibility == 'locked' &&
-                !following) {
-              return Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        CupertinoIcons.lock,
-                        size: 36,
-                        color: JimColors.rose,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'This profile is locked',
-                        style: base.copyWith(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${user.name} keeps this profile private. Follow them to see more.',
-                        textAlign: TextAlign.center,
-                        style: base.copyWith(
-                          fontSize: 15,
-                          color: muted,
-                          height: 1.45,
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      CupertinoButton.filled(
-                        borderRadius: BorderRadius.circular(14),
-                        onPressed: () => _follow(user),
-                        child: const Text('Follow'),
-                      ),
-                    ],
+          });
+        }
+        final following = _ownUser?.followingIds.contains(user.id) ?? false;
+        if (!_isOwn && user.profileVisibility == 'locked' && !following) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.lock,
+                    size: 36,
+                    color: JimColors.rose,
                   ),
-                ),
-              );
-            }
-            return _ProfileBody(
-              user: user,
-              isOwn: _isOwn,
-              storeLoaded: _storeLoaded,
-              store: _store,
-              subjectPct: _subjectPct,
-              earnedMilestones: _earnedMilestones(),
-              privacy: _privacy,
-              photoVisibility: _photoVisibility,
-              following: following,
-              onFollow: () => _follow(user),
-              onPrivacy: _updatePrivacy,
-              restrictedView: !_isOwn &&
-                  user.profileVisibility == 'restricted',
-            );
-          },
-        ),
-      ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'This profile is locked',
+                    style: base.copyWith(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${user.name} keeps this profile private. Follow them to see more.',
+                    textAlign: TextAlign.center,
+                    style: base.copyWith(
+                      fontSize: 15,
+                      color: muted,
+                      height: 1.45,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  FilledButton(
+                    onPressed: () => _follow(user),
+                    style: FilledButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    child: const Text('Follow'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        return _ProfileBody(
+          user: user,
+          isOwn: _isOwn,
+          storeLoaded: _storeLoaded,
+          store: _store,
+          subjectPct: _subjectPct,
+          earnedMilestones: _earnedMilestones(),
+          privacy: _privacy,
+          photoVisibility: _photoVisibility,
+          following: following,
+          onFollow: () => _follow(user),
+          onPrivacy: _updatePrivacy,
+          restrictedView: !_isOwn && user.profileVisibility == 'restricted',
+        );
+      },
+    );
+    if (!widget.showAppBar) return content;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Profile')),
+      body: SafeArea(child: content),
     );
   }
 }
@@ -358,9 +360,8 @@ class _ProfileBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
     final overallPct = (user.totalChaptersDone * 100 / 151).round();
@@ -368,8 +369,7 @@ class _ProfileBody extends StatelessWidget {
       streak: user.streak,
       totalChapters: user.totalChaptersDone,
     );
-    final showPhoto = isOwn ||
-        user.photoVisibility == 'all';
+    final showPhoto = isOwn || user.photoVisibility == 'all';
     return ListView(
       padding: const EdgeInsets.fromLTRB(0, 0, 0, 24),
       children: [
@@ -422,8 +422,7 @@ class _ProfileBody extends StatelessWidget {
                         : null,
                   ),
                   child: showPhoto &&
-                          (user.photoUrl == null ||
-                              user.photoUrl!.isEmpty)
+                          (user.photoUrl == null || user.photoUrl!.isEmpty)
                       ? Text(
                           user.name.isNotEmpty
                               ? user.name[0].toUpperCase()
@@ -431,7 +430,7 @@ class _ProfileBody extends StatelessWidget {
                           style: const TextStyle(
                             fontSize: 32,
                             fontWeight: FontWeight.w600,
-                            color: CupertinoColors.white,
+                            color: Colors.white,
                           ),
                         )
                       : null,
@@ -462,7 +461,7 @@ class _ProfileBody extends StatelessWidget {
                     Row(
                       children: [
                         const Icon(
-                          CupertinoIcons.flame,
+                          Icons.local_fire_department,
                           size: 18,
                           color: JimColors.rose,
                         ),
@@ -476,13 +475,15 @@ class _ProfileBody extends StatelessWidget {
                         ),
                         const Spacer(),
                         if (!isOwn)
-                          CupertinoButton.filled(
-                            borderRadius: BorderRadius.circular(999),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 8,
-                            ),
+                          FilledButton(
                             onPressed: following ? null : onFollow,
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 8,
+                              ),
+                              shape: const StadiumBorder(),
+                            ),
                             child: Text(
                               following ? 'Following' : 'Follow',
                             ),
@@ -512,7 +513,7 @@ class _ProfileBody extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 if (!storeLoaded && isOwn)
-                  const CupertinoActivityIndicator()
+                  const CircularProgressIndicator()
                 else if (isOwn)
                   ...syllabusData.map(
                     (subject) => _SubjectBar(
@@ -633,34 +634,36 @@ class _ProfileBody extends StatelessWidget {
                   style: base.copyWith(fontSize: 14, color: muted),
                 ),
                 const SizedBox(height: 8),
-                CupertinoSlidingSegmentedControl<String>(
-                  groupValue: privacy,
-                  backgroundColor:
-                      isDark ? JimColors.darkLine : JimColors.line,
-                  thumbColor:
-                      isDark ? JimColors.darkSurface : JimColors.card,
-                  children: const {
-                    'public': Padding(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      child: Text('Public'),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment<String>(
+                        value: 'public',
+                        label: Text('Public'),
+                      ),
+                      ButtonSegment<String>(
+                        value: 'restricted',
+                        label: Text('Restricted'),
+                      ),
+                      ButtonSegment<String>(
+                        value: 'locked',
+                        label: Text('Locked'),
+                      ),
+                    ],
+                    selected: {privacy},
+                    onSelectionChanged: (selection) {
+                      onPrivacy(profileVisibility: selection.first);
+                    },
+                    style: SegmentedButton.styleFrom(
+                      backgroundColor:
+                          isDark ? JimColors.darkLine : JimColors.line,
+                      selectedBackgroundColor:
+                          isDark ? JimColors.darkSurface : JimColors.card,
+                      selectedForegroundColor:
+                          isDark ? JimColors.darkText : JimColors.ink,
                     ),
-                    'restricted': Padding(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      child: Text('Restricted'),
-                    ),
-                    'locked': Padding(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      child: Text('Locked'),
-                    ),
-                  },
-                  onValueChanged: (value) {
-                    if (value != null) {
-                      onPrivacy(profileVisibility: value);
-                    }
-                  },
+                  ),
                 ),
                 const SizedBox(height: 16),
                 Text(
@@ -668,29 +671,32 @@ class _ProfileBody extends StatelessWidget {
                   style: base.copyWith(fontSize: 14, color: muted),
                 ),
                 const SizedBox(height: 8),
-                CupertinoSlidingSegmentedControl<String>(
-                  groupValue: photoVisibility,
-                  backgroundColor:
-                      isDark ? JimColors.darkLine : JimColors.line,
-                  thumbColor:
-                      isDark ? JimColors.darkSurface : JimColors.card,
-                  children: const {
-                    'all': Padding(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      child: Text('All'),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment<String>(
+                        value: 'all',
+                        label: Text('All'),
+                      ),
+                      ButtonSegment<String>(
+                        value: 'onlyMe',
+                        label: Text('Only me'),
+                      ),
+                    ],
+                    selected: {photoVisibility},
+                    onSelectionChanged: (selection) {
+                      onPrivacy(photoVisibility: selection.first);
+                    },
+                    style: SegmentedButton.styleFrom(
+                      backgroundColor:
+                          isDark ? JimColors.darkLine : JimColors.line,
+                      selectedBackgroundColor:
+                          isDark ? JimColors.darkSurface : JimColors.card,
+                      selectedForegroundColor:
+                          isDark ? JimColors.darkText : JimColors.ink,
                     ),
-                    'onlyMe': Padding(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      child: Text('Only me'),
-                    ),
-                  },
-                  onValueChanged: (value) {
-                    if (value != null) {
-                      onPrivacy(photoVisibility: value);
-                    }
-                  },
+                  ),
                 ),
               ],
             ],
@@ -709,9 +715,8 @@ class _SubjectBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),

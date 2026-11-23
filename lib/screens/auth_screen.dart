@@ -1,10 +1,10 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 import '../main.dart';
 import '../services/auth_service.dart';
 import '../services/supabase_init.dart';
 
-/// Email + password + Google sign-in, Cupertino only.
+/// Email + password + Google sign-in, Material only.
 ///
 /// Register flow: create the account directly with
 /// [AuthService.registerWithEmail] (email + password + name). No email-code
@@ -14,11 +14,11 @@ class AuthScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CupertinoPageScaffold(
-      navigationBar: const CupertinoNavigationBar(
-        middle: Text('Welcome'),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Welcome'),
       ),
-      child: const SafeArea(
+      body: const SafeArea(
         child: _AuthForm(),
       ),
     );
@@ -66,14 +66,13 @@ class _AuthFormState extends State<_AuthForm> {
 
   Future<void> _showError(String message) async {
     if (!mounted) return;
-    await showCupertinoDialog<void>(
+    await showDialog<void>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      builder: (context) => AlertDialog(
         title: const Text('Something went wrong'),
         content: Text(message),
         actions: [
-          CupertinoDialogAction(
-            isDefaultAction: true,
+          TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('OK'),
           ),
@@ -136,9 +135,8 @@ class _AuthFormState extends State<_AuthForm> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final online = AuthService.instance.isAvailable;
     return ListView(
@@ -164,10 +162,17 @@ class _AuthFormState extends State<_AuthForm> {
                   style: base.copyWith(fontSize: 14, height: 1.45),
                 ),
                 const SizedBox(height: 12),
-                CupertinoButton.filled(
-                  borderRadius: BorderRadius.circular(14),
-                  onPressed: _busy ? null : _tryAgain,
-                  child: const Text('Try again'),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: _busy ? null : _tryAgain,
+                    style: FilledButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    child: const Text('Try again'),
+                  ),
                 ),
               ],
             ),
@@ -185,74 +190,71 @@ class _AuthFormState extends State<_AuthForm> {
           style: base.copyWith(fontSize: 15, color: muted, height: 1.45),
         ),
         const SizedBox(height: 24),
-        CupertinoSlidingSegmentedControl<int>(
-          groupValue: _isRegister ? 1 : 0,
-          backgroundColor: isDark ? JimColors.darkLine : JimColors.line,
-          thumbColor: isDark ? JimColors.darkSurface : JimColors.card,
-          children: const {
-            0: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('Login'),
+        SizedBox(
+          width: double.infinity,
+          child: SegmentedButton<int>(
+            segments: const [
+              ButtonSegment<int>(
+                value: 0,
+                label: Text('Login'),
+              ),
+              ButtonSegment<int>(
+                value: 1,
+                label: Text('Register'),
+              ),
+            ],
+            selected: {_isRegister ? 1 : 0},
+            onSelectionChanged: (selection) {
+              setState(() => _isRegister = selection.first == 1);
+            },
+            style: SegmentedButton.styleFrom(
+              backgroundColor: isDark ? JimColors.darkLine : JimColors.line,
+              selectedBackgroundColor:
+                  isDark ? JimColors.darkSurface : JimColors.card,
+              selectedForegroundColor:
+                  isDark ? JimColors.darkText : JimColors.ink,
             ),
-            1: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('Register'),
-            ),
-          },
-          onValueChanged: (index) {
-            if (index != null) setState(() => _isRegister = index == 1);
-          },
+          ),
         ),
         const SizedBox(height: 20),
         if (_isRegister) ...[
-          CupertinoTextField(
+          TextField(
             controller: _nameController,
-            placeholder: 'Your name',
             textCapitalization: TextCapitalization.words,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: isDark ? JimColors.darkSurface : JimColors.card,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isDark ? JimColors.darkLine : JimColors.line,
-              ),
+            decoration: jimFieldDecoration(
+              dark: isDark,
+              hint: 'Your name',
             ),
           ),
           const SizedBox(height: 12),
         ],
-        CupertinoTextField(
+        TextField(
           controller: _emailController,
-          placeholder: 'Email',
           keyboardType: TextInputType.emailAddress,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: isDark ? JimColors.darkSurface : JimColors.card,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isDark ? JimColors.darkLine : JimColors.line,
-            ),
+          decoration: jimFieldDecoration(
+            dark: isDark,
+            hint: 'Email',
           ),
         ),
         const SizedBox(height: 12),
-        CupertinoTextField(
+        TextField(
           controller: _passwordController,
-          placeholder: 'Password',
           obscureText: true,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: isDark ? JimColors.darkSurface : JimColors.card,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isDark ? JimColors.darkLine : JimColors.line,
-            ),
+          decoration: jimFieldDecoration(
+            dark: isDark,
+            hint: 'Password',
           ),
         ),
         const SizedBox(height: 20),
         SizedBox(
           width: double.infinity,
-          child: CupertinoButton.filled(
-            borderRadius: BorderRadius.circular(14),
+          child: FilledButton(
             onPressed: _busy ? null : _submit,
+            style: FilledButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
             child: Text(
               _busy
                   ? 'Please wait…'
@@ -289,10 +291,15 @@ class _AuthFormState extends State<_AuthForm> {
         const SizedBox(height: 16),
         SizedBox(
           width: double.infinity,
-          child: CupertinoButton(
-            color: isDark ? JimColors.darkSurface : JimColors.card,
-            borderRadius: BorderRadius.circular(14),
+          child: FilledButton.tonal(
             onPressed: _busy ? null : _signInWithGoogle,
+            style: FilledButton.styleFrom(
+              backgroundColor: isDark ? JimColors.darkSurface : JimColors.card,
+              foregroundColor: isDark ? JimColors.darkText : JimColors.ink,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
             child: const Text('Continue with Google'),
           ),
         ),

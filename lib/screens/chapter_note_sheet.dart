@@ -1,21 +1,23 @@
 import 'dart:io';
 
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../main.dart';
 import '../services/notes_repository.dart';
 
 /// Per-chapter special note: text OR photo OR both. Opens as a
-/// Cupertino modal sheet; loads any existing note for the chapter.
+/// Material modal bottom sheet; loads any existing note for the chapter.
 class ChapterNoteSheet {
   static Future<void> show(
     BuildContext context, {
     required String chapterId,
     required String chapterTitle,
   }) {
-    return showCupertinoModalPopup<void>(
+    return showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       builder: (context) => _ChapterNoteSheetBody(
         chapterId: chapterId,
         chapterTitle: chapterTitle,
@@ -53,8 +55,7 @@ class _ChapterNoteSheetBodyState extends State<_ChapterNoteSheetBody> {
 
   Future<void> _loadExisting() async {
     try {
-      final note =
-          await NotesRepository.instance.getNote(widget.chapterId);
+      final note = await NotesRepository.instance.getNote(widget.chapterId);
       if (!mounted) return;
       setState(() {
         _textController.text = (note?['text'] as String?) ?? '';
@@ -137,9 +138,8 @@ class _ChapterNoteSheetBodyState extends State<_ChapterNoteSheetBody> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     return Container(
       height: MediaQuery.of(context).size.height * 0.75,
@@ -173,26 +173,21 @@ class _ChapterNoteSheetBodyState extends State<_ChapterNoteSheetBody> {
           ),
           const SizedBox(height: 20),
           if (_loading)
-            const Center(child: CupertinoActivityIndicator())
+            const Center(child: CircularProgressIndicator())
           else
             Expanded(
               child: ListView(
                 children: [
                   SizedBox(
                     height: 160,
-                    child: CupertinoTextField(
+                    child: TextField(
                       controller: _textController,
                       maxLines: null,
                       expands: true,
                       textAlignVertical: TextAlignVertical.top,
-                      placeholder: 'Write the chapter in your own words…',
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: isDark ? JimColors.darkBg : JimColors.paper,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: isDark ? JimColors.darkLine : JimColors.line,
-                        ),
+                      decoration: jimFieldDecoration(
+                        dark: isDark,
+                        hint: 'Write the chapter in your own words…',
                       ),
                     ),
                   ),
@@ -200,17 +195,10 @@ class _ChapterNoteSheetBodyState extends State<_ChapterNoteSheetBody> {
                   _photoPreview(),
                   if (_localPhotoPath != null || _savedPhotoUrl != null)
                     const SizedBox(height: 16),
-                  CupertinoButton(
-                    padding: EdgeInsets.zero,
+                  TextButton.icon(
                     onPressed: _pickPhoto,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(CupertinoIcons.photo, size: 18),
-                        SizedBox(width: 8),
-                        Text('Add a photo'),
-                      ],
-                    ),
+                    icon: const Icon(Icons.photo, size: 18),
+                    label: const Text('Add a photo'),
                   ),
                   if (_error != null) ...[
                     const SizedBox(height: 12),
@@ -218,7 +206,7 @@ class _ChapterNoteSheetBodyState extends State<_ChapterNoteSheetBody> {
                       _error!,
                       style: base.copyWith(
                         fontSize: 14,
-                        color: CupertinoColors.systemRed,
+                        color: Colors.red,
                         height: 1.45,
                       ),
                     ),
@@ -229,9 +217,13 @@ class _ChapterNoteSheetBodyState extends State<_ChapterNoteSheetBody> {
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
-            child: CupertinoButton.filled(
-              borderRadius: BorderRadius.circular(14),
+            child: FilledButton(
               onPressed: _saving || _loading ? null : _save,
+              style: FilledButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
               child: Text(_saving ? 'Saving…' : 'Save note'),
             ),
           ),
@@ -270,7 +262,7 @@ class ChapterNoteBadge extends StatelessWidget {
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: CupertinoColors.white,
+              color: Colors.white,
             ),
           ),
         );

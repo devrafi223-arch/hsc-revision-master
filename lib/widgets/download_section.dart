@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
 import '../main.dart';
@@ -18,9 +18,9 @@ class DownloadSection extends StatelessWidget {
   const DownloadSection({super.key});
 
   Future<void> _showLink(BuildContext context, String title, String url) async {
-    await showCupertinoDialog<void>(
+    await showDialog<void>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      builder: (context) => AlertDialog(
         title: Text(title),
         content: Padding(
           padding: const EdgeInsets.only(top: 12),
@@ -30,8 +30,7 @@ class DownloadSection extends StatelessWidget {
           ),
         ),
         actions: [
-          CupertinoDialogAction(
-            isDefaultAction: true,
+          TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Close'),
           ),
@@ -44,9 +43,8 @@ class DownloadSection extends StatelessWidget {
   Widget build(BuildContext context) {
     // Shown only on web.
     if (!kIsWeb) return const SizedBox.shrink();
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
     return Container(
@@ -61,8 +59,7 @@ class DownloadSection extends StatelessWidget {
         border: Border.all(color: line),
         boxShadow: [
           BoxShadow(
-            color:
-                CupertinoColors.black.withValues(alpha: isDark ? 0.25 : 0.04),
+            color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.04),
             blurRadius: 16,
             offset: const Offset(0, 4),
           ),
@@ -83,12 +80,16 @@ class DownloadSection extends StatelessWidget {
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
-            child: CupertinoButton.filled(
-              borderRadius: BorderRadius.circular(14),
+            child: FilledButton(
               onPressed: () => _showLink(
                 context,
                 'Android APK',
                 androidApkUrl,
+              ),
+              style: FilledButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
               child: const Text('Android APK'),
             ),
@@ -96,13 +97,18 @@ class DownloadSection extends StatelessWidget {
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
-            child: CupertinoButton(
-              color: isDark ? JimColors.darkBg : JimColors.paper,
-              borderRadius: BorderRadius.circular(14),
+            child: FilledButton.tonal(
               onPressed: () => _showLink(
                 context,
                 'Windows / Linux (PC)',
                 pcBuildUrl,
+              ),
+              style: FilledButton.styleFrom(
+                backgroundColor: isDark ? JimColors.darkBg : JimColors.paper,
+                foregroundColor: isDark ? JimColors.darkText : JimColors.ink,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
               child: const Text('Windows / Linux (PC)'),
             ),

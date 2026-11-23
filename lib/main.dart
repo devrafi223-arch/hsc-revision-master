@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'data/syllabus.dart';
@@ -34,20 +34,90 @@ class JimColors {
   static const darkLine = Color(0xFF333136);
 }
 
-/// Cupertino theme built on the Jim palette. Cupertino's default blue is
-/// never used: primaryColor is the soft black (paper-white text on dark).
-CupertinoThemeData _cupertinoTheme({required bool dark}) {
-  return CupertinoThemeData(
+/// Material 3 theme built on the Jim palette. The old iOS blue is
+/// never used: primary is the soft black (paper-white text on dark),
+/// rose is reserved for progress, done states and small highlights.
+ThemeData jimTheme({required bool dark}) {
+  final scheme = ColorScheme(
     brightness: dark ? Brightness.dark : Brightness.light,
-    primaryColor: dark ? JimColors.darkText : JimColors.softBlack,
-    primaryContrastingColor: dark ? JimColors.softBlack : CupertinoColors.white,
-    barBackgroundColor: dark ? JimColors.darkBg : JimColors.paper,
+    primary: dark ? JimColors.darkText : JimColors.softBlack,
+    onPrimary: dark ? JimColors.softBlack : Colors.white,
+    secondary: JimColors.rose,
+    onSecondary: Colors.white,
+    tertiary: JimColors.roseLight,
+    surface: dark ? JimColors.darkSurface : JimColors.card,
+    onSurface: dark ? JimColors.darkText : JimColors.ink,
+    error: Colors.red,
+    onError: Colors.white,
+  );
+  return ThemeData(
+    useMaterial3: true,
+    colorScheme: scheme,
     scaffoldBackgroundColor: dark ? JimColors.darkBg : JimColors.paper,
-    textTheme: CupertinoTextThemeData(
-      textStyle: TextStyle(
-        color: dark ? JimColors.darkText : JimColors.ink,
-        fontFamily: '.SF Pro Text',
-      ),
+    appBarTheme: AppBarTheme(
+      backgroundColor: dark ? JimColors.darkBg : JimColors.paper,
+      foregroundColor: dark ? JimColors.darkText : JimColors.ink,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      centerTitle: true,
+    ),
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: dark ? JimColors.darkBg : JimColors.paper,
+      indicatorColor: JimColors.rose.withValues(alpha: 0.18),
+      iconTheme: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) {
+          return IconThemeData(
+            color: dark ? JimColors.darkText : JimColors.softBlack,
+          );
+        }
+        return IconThemeData(
+          color: dark ? JimColors.darkMuted : JimColors.muted,
+        );
+      }),
+      labelTextStyle: WidgetStateProperty.resolveWith((states) {
+        final selected = states.contains(WidgetState.selected);
+        return TextStyle(
+          fontSize: 12,
+          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+          color: selected
+              ? (dark ? JimColors.darkText : JimColors.softBlack)
+              : (dark ? JimColors.darkMuted : JimColors.muted),
+        );
+      }),
+    ),
+    switchTheme: SwitchThemeData(
+      trackColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) return JimColors.rose;
+        return null;
+      }),
+    ),
+  );
+}
+
+/// Shared rounded text-field decoration in the Jim palette, so every
+/// field in the app looks the same without repeating the border code.
+InputDecoration jimFieldDecoration({
+  required bool dark,
+  required String hint,
+  double borderRadius = 16,
+  EdgeInsetsGeometry contentPadding = const EdgeInsets.all(16),
+  Widget? prefixIcon,
+}) {
+  final border = OutlineInputBorder(
+    borderRadius: BorderRadius.circular(borderRadius),
+    borderSide: BorderSide(color: dark ? JimColors.darkLine : JimColors.line),
+  );
+  return InputDecoration(
+    hintText: hint,
+    filled: true,
+    fillColor: dark ? JimColors.darkSurface : JimColors.card,
+    contentPadding: contentPadding,
+    prefixIcon: prefixIcon,
+    border: border,
+    enabledBorder: border,
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(borderRadius),
+      borderSide: const BorderSide(color: JimColors.rose, width: 1.5),
     ),
   );
 }
@@ -104,10 +174,10 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
 
   @override
   Widget build(BuildContext context) {
-    return CupertinoApp(
+    return MaterialApp(
       title: 'HSC Science Revision Master',
       debugShowCheckedModeBanner: false,
-      theme: _cupertinoTheme(dark: _dark),
+      theme: jimTheme(dark: _dark),
       // Auth gate (v3): signed-out users see the auth screen, signed-in
       // users see the tracker. In local-only mode AuthService emits null
       // (no account exists without Supabase), so the auth screen shows

@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../main.dart';
@@ -17,8 +17,18 @@ import '../services/voice_service.dart';
 import 'profile_screen.dart';
 
 const List<String> _monthNames = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 String _formatTimestamp(DateTime t) {
@@ -102,14 +112,13 @@ class _CommunityScreenState extends State<CommunityScreen> {
 
   Future<void> _showError(String message) async {
     if (!mounted) return;
-    await showCupertinoDialog<void>(
+    await showDialog<void>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      builder: (context) => AlertDialog(
         title: const Text('Could not send'),
         content: Text(message),
         actions: [
-          CupertinoDialogAction(
-            isDefaultAction: true,
+          TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('OK'),
           ),
@@ -192,14 +201,13 @@ class _CommunityScreenState extends State<CommunityScreen> {
     final started = await VoiceService.instance.startRecording();
     if (started == null) {
       if (!mounted) return;
-      await showCupertinoDialog<void>(
+      await showDialog<void>(
         context: context,
-        builder: (context) => CupertinoAlertDialog(
+        builder: (context) => AlertDialog(
           title: const Text('Voice messages'),
           content: const Text('Voice recording coming soon on this device.'),
           actions: [
-            CupertinoDialogAction(
-              isDefaultAction: true,
+            TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('OK'),
             ),
@@ -213,48 +221,55 @@ class _CommunityScreenState extends State<CommunityScreen> {
 
   Future<void> _createPoll() async {
     final questionController = TextEditingController();
-    final optionControllers =
-        List.generate(4, (_) => TextEditingController());
-    final ok = await showCupertinoDialog<bool>(
+    final optionControllers = List.generate(4, (_) => TextEditingController());
+    final ok = await showDialog<bool>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
-        title: const Text('Create a poll'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            CupertinoTextField(
-              controller: questionController,
-              placeholder: 'Question',
-              padding: const EdgeInsets.all(12),
-            ),
-            const SizedBox(height: 8),
-            ...optionControllers.asMap().entries.map(
-              (entry) => Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: CupertinoTextField(
-                  controller: entry.value,
-                  placeholder: entry.key < 2
-                      ? 'Option ${entry.key + 1}'
-                      : 'Option ${entry.key + 1} (optional)',
-                  padding: const EdgeInsets.all(12),
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return AlertDialog(
+          title: const Text('Create a poll'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              TextField(
+                controller: questionController,
+                decoration: jimFieldDecoration(
+                  dark: isDark,
+                  hint: 'Question',
+                  contentPadding: const EdgeInsets.all(12),
                 ),
               ),
+              const SizedBox(height: 8),
+              ...optionControllers.asMap().entries.map(
+                    (entry) => Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: TextField(
+                        controller: entry.value,
+                        decoration: jimFieldDecoration(
+                          dark: isDark,
+                          hint: entry.key < 2
+                              ? 'Option ${entry.key + 1}'
+                              : 'Option ${entry.key + 1} (optional)',
+                          contentPadding: const EdgeInsets.all(12),
+                        ),
+                      ),
+                    ),
+                  ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Post poll'),
             ),
           ],
-        ),
-        actions: [
-          CupertinoDialogAction(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          CupertinoDialogAction(
-            isDefaultAction: true,
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Post poll'),
-          ),
-        ],
-      ),
+        );
+      },
     );
     final question = questionController.text.trim();
     final options = optionControllers
@@ -293,54 +308,59 @@ class _CommunityScreenState extends State<CommunityScreen> {
     }
     if (!mounted) return;
     final bookmarked = uid != null && message.bookmarkedBy.contains(uid);
-    await showCupertinoModalPopup<void>(
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (context) => CupertinoActionSheet(
-        actions: [
-          CupertinoActionSheetAction(
-            onPressed: () {
-              Navigator.of(context).pop();
-              setState(() => _replyTo = message);
-            },
-            child: const Text('Reply'),
-          ),
-          CupertinoActionSheetAction(
-            onPressed: () {
-              Navigator.of(context).pop();
-              CommunityService.instance.toggleBookmark(message.id);
-            },
-            child: Text(bookmarked ? 'Remove bookmark' : 'Bookmark'),
-          ),
-          CupertinoActionSheetAction(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _reportMessage(message);
-            },
-            child: const Text('Report'),
-          ),
-          CupertinoActionSheetAction(
-            isDestructiveAction: true,
-            onPressed: () {
-              Navigator.of(context).pop();
-              _blockUser(message);
-            },
-            child: const Text('Block user'),
-          ),
-          if (isAdmin)
-            CupertinoActionSheetAction(
-              onPressed: () {
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: const Text('Reply'),
+              onTap: () {
                 Navigator.of(context).pop();
-                CommunityService.instance.togglePin(
-                  message.id,
-                  !message.pinned,
-                );
+                setState(() => _replyTo = message);
               },
-              child: Text(message.pinned ? 'Unpin' : 'Pin'),
             ),
-        ],
-        cancelButton: CupertinoActionSheetAction(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+            ListTile(
+              title: Text(bookmarked ? 'Remove bookmark' : 'Bookmark'),
+              onTap: () {
+                Navigator.of(context).pop();
+                CommunityService.instance.toggleBookmark(message.id);
+              },
+            ),
+            ListTile(
+              title: const Text('Report'),
+              onTap: () {
+                Navigator.of(context).pop();
+                _reportMessage(message);
+              },
+            ),
+            ListTile(
+              title: const Text(
+                'Block user',
+                style: TextStyle(color: Colors.red),
+              ),
+              onTap: () {
+                Navigator.of(context).pop();
+                _blockUser(message);
+              },
+            ),
+            if (isAdmin)
+              ListTile(
+                title: Text(message.pinned ? 'Unpin' : 'Pin'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  CommunityService.instance.togglePin(
+                    message.id,
+                    !message.pinned,
+                  );
+                },
+              ),
+            ListTile(
+              title: const Text('Cancel'),
+              onTap: () => Navigator.of(context).pop(),
+            ),
+          ],
         ),
       ),
     );
@@ -348,32 +368,37 @@ class _CommunityScreenState extends State<CommunityScreen> {
 
   Future<void> _reportMessage(CommunityMessage message) async {
     final controller = TextEditingController();
-    final reason = await showCupertinoDialog<String>(
+    final reason = await showDialog<String>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
-        title: const Text('Report this message'),
-        content: Padding(
-          padding: const EdgeInsets.only(top: 12),
-          child: CupertinoTextField(
-            controller: controller,
-            placeholder: 'Why is this a problem?',
-            maxLines: 3,
-            padding: const EdgeInsets.all(12),
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return AlertDialog(
+          title: const Text('Report this message'),
+          content: Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: TextField(
+              controller: controller,
+              maxLines: 3,
+              decoration: jimFieldDecoration(
+                dark: isDark,
+                hint: 'Why is this a problem?',
+                contentPadding: const EdgeInsets.all(12),
+              ),
+            ),
           ),
-        ),
-        actions: [
-          CupertinoDialogAction(
-            onPressed: () => Navigator.of(context).pop(null),
-            child: const Text('Cancel'),
-          ),
-          CupertinoDialogAction(
-            isDefaultAction: true,
-            onPressed: () =>
-                Navigator.of(context).pop(controller.text.trim()),
-            child: const Text('Report'),
-          ),
-        ],
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(controller.text.trim()),
+              child: const Text('Report'),
+            ),
+          ],
+        );
+      },
     );
     controller.dispose();
     if (reason == null || reason.isEmpty) return;
@@ -385,20 +410,20 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   Future<void> _blockUser(CommunityMessage message) async {
-    final ok = await showCupertinoDialog<bool>(
+    final ok = await showDialog<bool>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      builder: (context) => AlertDialog(
         title: Text('Block ${_displayName(message)}?'),
         content: const Text(
           'You will no longer see their messages.',
         ),
         actions: [
-          CupertinoDialogAction(
+          TextButton(
             onPressed: () => Navigator.of(context).pop(false),
             child: const Text('Cancel'),
           ),
-          CupertinoDialogAction(
-            isDestructiveAction: true,
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
             onPressed: () => Navigator.of(context).pop(true),
             child: const Text('Block'),
           ),
@@ -435,7 +460,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
     var list = all;
     if (_bookmarkedOnly) {
       final uid = _uid;
-      list = list.where((m) => uid != null && m.bookmarkedBy.contains(uid)).toList();
+      list = list
+          .where((m) => uid != null && m.bookmarkedBy.contains(uid))
+          .toList();
     }
     if (query.isNotEmpty) {
       list = list
@@ -452,331 +479,316 @@ class _CommunityScreenState extends State<CommunityScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
-    return CupertinoPageScaffold(
-      navigationBar: const CupertinoNavigationBar(
-        middle: Text('Community'),
-      ),
-      child: SafeArea(
-        child: Column(
-          children: [
-            StreamBuilder<bool>(
-              stream: SyncService.instance.isOfflineStream,
-              initialData: false,
-              builder: (context, snapshot) {
-                if (snapshot.data != true) return const SizedBox.shrink();
-                return Container(
-                  width: double.infinity,
-                  margin:
-                      const EdgeInsets.fromLTRB(24, 12, 24, 0),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: JimColors.rose.withValues(
-                      alpha: isDark ? 0.18 : 0.08,
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    'Offline — messages will sync when back online.',
-                    textAlign: TextAlign.center,
-                    style: base.copyWith(fontSize: 14, height: 1.45),
-                  ),
-                );
-              },
-            ),
-            _ProgressRail(
-              onOpenProfile: (user) {
-                Navigator.of(context).push(
-                  CupertinoPageRoute(
-                    builder: (_) => ProfileScreen(userId: user.id),
-                  ),
-                );
-              },
-            ),
-            // Session-wide anonymous posting: stays on until turned off.
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
-              child: Row(
-                children: [
-                  const Icon(
-                    CupertinoIcons.person_fill,
-                    size: 18,
-                    color: JimColors.rose,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Post as Anonymous',
-                      style: base.copyWith(fontSize: 14, height: 1.45),
-                    ),
-                  ),
-                  CupertinoSwitch(
-                    key: const Key('anonymous-session-switch'),
-                    value: _anonymousSession,
-                    activeTrackColor: JimColors.rose,
-                    onChanged: (value) {
-                      setState(() {
-                        _anonymousSession = value;
-                        if (!value) _anonymousOnce = false;
-                      });
-                    },
-                  ),
-                ],
+    // Tab-only screen: the HomeScreen scaffold (AppBar + NavigationBar)
+    // wraps this Column, so there is no scaffold of its own here.
+    return Column(
+      children: [
+        StreamBuilder<bool>(
+          stream: SyncService.instance.isOfflineStream,
+          initialData: false,
+          builder: (context, snapshot) {
+            if (snapshot.data != true) return const SizedBox.shrink();
+            return Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 10,
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
-              child: CupertinoSearchTextField(
-                controller: _searchController,
-                onChanged: (q) => setState(() => _searchQuery = q),
-                placeholder: 'Search messages',
+              decoration: BoxDecoration(
+                color: JimColors.rose.withValues(
+                  alpha: isDark ? 0.18 : 0.08,
+                ),
+                borderRadius: BorderRadius.circular(12),
               ),
+              child: Text(
+                'Offline — messages will sync when back online.',
+                textAlign: TextAlign.center,
+                style: base.copyWith(fontSize: 14, height: 1.45),
+              ),
+            );
+          },
+        ),
+        _ProgressRail(
+          onOpenProfile: (user) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ProfileScreen(userId: user.id),
+              ),
+            );
+          },
+        ),
+        // Session-wide anonymous posting: stays on until turned off.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.person,
+                size: 18,
+                color: JimColors.rose,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Post as Anonymous',
+                  style: base.copyWith(fontSize: 14, height: 1.45),
+                ),
+              ),
+              Switch(
+                key: const Key('anonymous-session-switch'),
+                value: _anonymousSession,
+                activeTrackColor: JimColors.rose,
+                onChanged: (value) {
+                  setState(() {
+                    _anonymousSession = value;
+                    if (!value) _anonymousOnce = false;
+                  });
+                },
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+          child: TextField(
+            controller: _searchController,
+            onChanged: (q) => setState(() => _searchQuery = q),
+            decoration: jimFieldDecoration(
+              dark: isDark,
+              hint: 'Search messages',
+              borderRadius: 999,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 10,
+              ),
+              prefixIcon: const Icon(Icons.search),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
-              child: Row(
-                children: [
-                  _FilterChip(
-                    label: 'Bookmarked',
-                    selected: _bookmarkedOnly,
-                    onTap: () => setState(
-                      () => _bookmarkedOnly = !_bookmarkedOnly,
-                    ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+          child: Row(
+            children: [
+              _FilterChip(
+                label: 'Bookmarked',
+                selected: _bookmarkedOnly,
+                onTap: () => setState(
+                  () => _bookmarkedOnly = !_bookmarkedOnly,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Realtime • messages appear instantly when online',
+                  style: base.copyWith(
+                    fontSize: 13,
+                    color: muted,
+                    height: 1.45,
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: StreamBuilder<List<CommunityMessage>>(
+            stream: CommunityService.instance.messagesStream(),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
                     child: Text(
-                      'Realtime • messages appear instantly when online',
+                      'Could not load messages. Check your connection and try again.',
+                      textAlign: TextAlign.center,
                       style: base.copyWith(
-                        fontSize: 13,
+                        fontSize: 15,
                         color: muted,
                         height: 1.45,
                       ),
                     ),
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: StreamBuilder<List<CommunityMessage>>(
-                stream: CommunityService.instance.messagesStream(),
-                builder: (context, snapshot) {
-                  if (snapshot.hasError) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          'Could not load messages. Check your connection and try again.',
-                          textAlign: TextAlign.center,
-                          style: base.copyWith(
-                            fontSize: 15,
-                            color: muted,
-                            height: 1.45,
-                          ),
-                        ),
+                );
+              }
+              if (!snapshot.hasData) {
+                return const Center(
+                  child: CircularProgressIndicator(),
+                );
+              }
+              final messages = _visibleMessages(snapshot.data!);
+              _maybeAutoScroll(messages.length);
+              if (messages.isEmpty) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      _searchQuery.isNotEmpty || _bookmarkedOnly
+                          ? 'No messages match.'
+                          : 'No messages yet — say hello!',
+                      textAlign: TextAlign.center,
+                      style: base.copyWith(
+                        fontSize: 15,
+                        color: muted,
+                        height: 1.45,
                       ),
-                    );
-                  }
-                  if (!snapshot.hasData) {
-                    return const Center(
-                      child: CupertinoActivityIndicator(),
-                    );
-                  }
-                  final messages = _visibleMessages(snapshot.data!);
-                  _maybeAutoScroll(messages.length);
-                  if (messages.isEmpty) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          _searchQuery.isNotEmpty || _bookmarkedOnly
-                              ? 'No messages match.'
-                              : 'No messages yet — say hello!',
-                          textAlign: TextAlign.center,
-                          style: base.copyWith(
-                            fontSize: 15,
-                            color: muted,
-                            height: 1.45,
-                          ),
-                        ),
-                      ),
-                    );
-                  }
-                  return ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) {
-                      final message = messages[index];
-                      return _MessageBubble(
-                        message: message,
-                        currentUid: _uid,
-                        isPlayingVoice: _playingVoiceId == message.id,
-                        onLongPress: () => _showMessageActions(message),
-                        onReact: (emoji) => CommunityService.instance
-                            .react(message.id, emoji),
-                        onVote: (optionIndex) => CommunityService.instance
-                            .vote(message.id, optionIndex),
-                        onPlayVoice: () => _togglePlayVoice(message),
-                      );
-                    },
+                    ),
+                  ),
+                );
+              }
+              return ListView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+                itemCount: messages.length,
+                itemBuilder: (context, index) {
+                  final message = messages[index];
+                  return _MessageBubble(
+                    message: message,
+                    currentUid: _uid,
+                    isPlayingVoice: _playingVoiceId == message.id,
+                    onLongPress: () => _showMessageActions(message),
+                    onReact: (emoji) =>
+                        CommunityService.instance.react(message.id, emoji),
+                    onVote: (optionIndex) =>
+                        CommunityService.instance.vote(message.id, optionIndex),
+                    onPlayVoice: () => _togglePlayVoice(message),
                   );
                 },
-              ),
-            ),
-            Container(
-              decoration: BoxDecoration(
-                color: isDark ? JimColors.darkSurface : JimColors.card,
-                border: Border(top: BorderSide(color: line)),
-              ),
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (_replyTo != null)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              'Replying to ${_displayName(_replyTo!)}: '
-                              '${(_replyTo!.text ?? '').length > 40 ? '${(_replyTo!.text ?? '').substring(0, 40)}…' : (_replyTo!.text ?? '')}',
-                              style: base.copyWith(
-                                fontSize: 13,
-                                color: muted,
-                                height: 1.45,
-                              ),
-                            ),
+              );
+            },
+          ),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: isDark ? JimColors.darkSurface : JimColors.card,
+            border: Border(top: BorderSide(color: line)),
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_replyTo != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Replying to ${_displayName(_replyTo!)}: '
+                          '${(_replyTo!.text ?? '').length > 40 ? '${(_replyTo!.text ?? '').substring(0, 40)}…' : (_replyTo!.text ?? '')}',
+                          style: base.copyWith(
+                            fontSize: 13,
+                            color: muted,
+                            height: 1.45,
                           ),
-                          CupertinoButton(
-                            padding: EdgeInsets.zero,
-                            onPressed: () =>
-                                setState(() => _replyTo = null),
-                            child: const Icon(
-                              CupertinoIcons.xmark_circle,
-                              size: 20,
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => setState(() => _replyTo = null),
+                        icon: const Icon(
+                          Icons.cancel,
+                          size: 20,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: _sendPhoto,
+                    icon: const Icon(Icons.photo),
+                  ),
+                  IconButton(
+                    onPressed: _createPoll,
+                    icon: const Icon(Icons.bar_chart),
+                  ),
+                  IconButton(
+                    onPressed: _toggleVoiceRecording,
+                    icon: Icon(
+                      _recording ? Icons.stop_circle : Icons.mic,
+                      color: _recording ? Colors.red : null,
+                    ),
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: _composerController,
+                      decoration: jimFieldDecoration(
+                        dark: isDark,
+                        hint: _recording
+                            ? 'Recording… tap the mic to stop'
+                            : 'Write a message…',
+                        borderRadius: 999,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
+                      ),
+                      onSubmitted: (_) => _sendText(),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  // Per-message anonymous toggle, next to the send
+                  // field. Shows the effective state (session switch
+                  // or this message); tapping flips it.
+                  GestureDetector(
+                    key: const Key('anonymous-composer-chip'),
+                    onTap: _toggleAnonymousComposer,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _anonymousEffective
+                            ? JimColors.rose
+                            : const Color(0x00000000),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: _anonymousEffective ? JimColors.rose : line,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.person,
+                            size: 13,
+                            color: _anonymousEffective ? Colors.white : muted,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Anonymous',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: _anonymousEffective
+                                  ? Colors.white
+                                  : (isDark
+                                      ? JimColors.darkText
+                                      : JimColors.ink),
                             ),
                           ),
                         ],
                       ),
                     ),
-                  Row(
-                    children: [
-                      CupertinoButton(
-                        padding: EdgeInsets.zero,
-                        onPressed: _sendPhoto,
-                        child: const Icon(CupertinoIcons.photo),
-                      ),
-                      CupertinoButton(
-                        padding: EdgeInsets.zero,
-                        onPressed: _createPoll,
-                        child: const Icon(CupertinoIcons.chart_bar),
-                      ),
-                      CupertinoButton(
-                        padding: EdgeInsets.zero,
-                        onPressed: _toggleVoiceRecording,
-                        child: Icon(
-                          _recording
-                              ? CupertinoIcons.stop_circle_fill
-                              : CupertinoIcons.mic,
-                          color: _recording
-                              ? CupertinoColors.systemRed
-                              : null,
-                        ),
-                      ),
-                      Expanded(
-                        child: CupertinoTextField(
-                          controller: _composerController,
-                          placeholder: _recording
-                              ? 'Recording… tap the mic to stop'
-                              : 'Write a message…',
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isDark
-                                ? JimColors.darkBg
-                                : JimColors.paper,
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(color: line),
-                          ),
-                          onSubmitted: (_) => _sendText(),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      // Per-message anonymous toggle, next to the send
-                      // field. Shows the effective state (session switch
-                      // or this message); tapping flips it.
-                      GestureDetector(
-                        key: const Key('anonymous-composer-chip'),
-                        onTap: _toggleAnonymousComposer,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 7,
-                          ),
-                          decoration: BoxDecoration(
-                            color: _anonymousEffective
-                                ? JimColors.rose
-                                : const Color(0x00000000),
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(
-                              color: _anonymousEffective
-                                  ? JimColors.rose
-                                  : line,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                CupertinoIcons.person_fill,
-                                size: 13,
-                                color: _anonymousEffective
-                                    ? CupertinoColors.white
-                                    : muted,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Anonymous',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: _anonymousEffective
-                                      ? CupertinoColors.white
-                                      : (isDark
-                                          ? JimColors.darkText
-                                          : JimColors.ink),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      CupertinoButton(
-                        padding: EdgeInsets.zero,
-                        onPressed: _sendText,
-                        child: const Icon(CupertinoIcons.arrow_up_circle_fill),
-                      ),
-                    ],
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    onPressed: _sendText,
+                    icon: const Icon(Icons.arrow_circle_up),
                   ),
                 ],
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
+      ],
     );
   }
 }
@@ -794,8 +806,7 @@ class _FilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -817,7 +828,7 @@ class _FilterChip extends StatelessWidget {
             fontSize: 14,
             fontWeight: FontWeight.w600,
             color: selected
-                ? (isDark ? JimColors.softBlack : CupertinoColors.white)
+                ? (isDark ? JimColors.softBlack : Colors.white)
                 : (isDark ? JimColors.darkText : JimColors.ink),
           ),
         ),
@@ -835,9 +846,8 @@ class _ProgressRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     return FutureBuilder<List<AppUser>>(
       future: UserRepository.instance.leaderboardWeekly(limit: 10),
@@ -887,14 +897,13 @@ class _ProgressRail extends StatelessWidget {
                                   )
                                 : null,
                           ),
-                          child: user.photoUrl == null ||
-                                  user.photoUrl!.isEmpty
+                          child: user.photoUrl == null || user.photoUrl!.isEmpty
                               ? Text(
                                   user.name.isNotEmpty
                                       ? user.name[0].toUpperCase()
                                       : '?',
                                   style: const TextStyle(
-                                    color: CupertinoColors.white,
+                                    color: Colors.white,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 )
@@ -943,8 +952,7 @@ class _ProgressRing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return SizedBox(
       width: size,
       height: size,
@@ -1024,9 +1032,8 @@ class _MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
     if (message.flagged) {
@@ -1085,9 +1092,9 @@ class _MessageBubble extends StatelessWidget {
                   ),
                   child: message.isAnonymous
                       ? const Icon(
-                          CupertinoIcons.person_fill,
+                          Icons.person,
                           size: 15,
-                          color: CupertinoColors.white,
+                          color: Colors.white,
                         )
                       : message.authorPhoto == null ||
                               message.authorPhoto!.isEmpty
@@ -1098,7 +1105,7 @@ class _MessageBubble extends StatelessWidget {
                               style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
-                                color: CupertinoColors.white,
+                                color: Colors.white,
                               ),
                             )
                           : null,
@@ -1120,7 +1127,7 @@ class _MessageBubble extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
-                        color: CupertinoColors.white,
+                        color: Colors.white,
                       ),
                     ),
                   ),
@@ -1173,8 +1180,7 @@ class _MessageBubble extends StatelessWidget {
                 style: base.copyWith(fontSize: 15, height: 1.45),
               ),
             ],
-            if (message.photoUrl != null &&
-                message.photoUrl!.isNotEmpty) ...[
+            if (message.photoUrl != null && message.photoUrl!.isNotEmpty) ...[
               const SizedBox(height: 10),
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
@@ -1221,9 +1227,7 @@ class _MessageBubble extends StatelessWidget {
                           vertical: 5,
                         ),
                         decoration: BoxDecoration(
-                          color: isDark
-                              ? JimColors.darkBg
-                              : JimColors.paper,
+                          color: isDark ? JimColors.darkBg : JimColors.paper,
                           borderRadius: BorderRadius.circular(999),
                           border: Border.all(color: line),
                         ),
@@ -1238,7 +1242,7 @@ class _MessageBubble extends StatelessWidget {
                 if (currentUid != null &&
                     message.bookmarkedBy.contains(currentUid))
                   const Icon(
-                    CupertinoIcons.bookmark_fill,
+                    Icons.bookmark,
                     size: 16,
                     color: JimColors.rose,
                   ),
@@ -1264,9 +1268,8 @@ class _PollCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
     final myVote = currentUid == null ? null : poll.votes[currentUid];
@@ -1299,9 +1302,7 @@ class _PollCard extends StatelessWidget {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: myVote == i
-                          ? JimColors.rose
-                          : line,
+                      color: myVote == i ? JimColors.rose : line,
                       width: myVote == i ? 1.5 : 1,
                     ),
                   ),
@@ -1335,8 +1336,7 @@ class _PollCard extends StatelessWidget {
                           height: 6,
                           color: line,
                           child: FractionallySizedBox(
-                            widthFactor:
-                                (percentages[i] / 100).clamp(0.0, 1.0),
+                            widthFactor: (percentages[i] / 100).clamp(0.0, 1.0),
                             alignment: Alignment.centerLeft,
                             child: Container(
                               height: 6,
@@ -1371,19 +1371,15 @@ class _VoiceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     return Row(
       children: [
-        CupertinoButton(
-          padding: EdgeInsets.zero,
+        IconButton(
           onPressed: onPlay,
-          child: Icon(
-            isPlaying
-                ? CupertinoIcons.stop_circle_fill
-                : CupertinoIcons.play_circle_fill,
+          icon: Icon(
+            isPlaying ? Icons.stop_circle : Icons.play_circle,
             size: 32,
           ),
         ),

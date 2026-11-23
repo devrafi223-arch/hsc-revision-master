@@ -1,19 +1,19 @@
 import 'dart:math' as math;
 
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 import '../main.dart';
 import '../models/milestone.dart';
 
-/// Chapter-complete celebration: a Cupertino dialog with a short
+/// Chapter-complete celebration: a Material dialog with a short
 /// confetti burst (plain CustomPaint rectangles, no new dependency)
 /// and the milestone name. Call [MilestoneCelebration.show] once per
 /// chapter — the caller dedupes (see HomeScreen).
 class MilestoneCelebration {
   static void show(BuildContext context, String milestoneName) {
-    showCupertinoDialog<void>(
+    showDialog<void>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      builder: (context) => AlertDialog(
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -35,8 +35,7 @@ class MilestoneCelebration {
           ],
         ),
         actions: [
-          CupertinoDialogAction(
-            isDefaultAction: true,
+          TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Keep going'),
           ),
@@ -132,8 +131,7 @@ class _ConfettiPainter extends CustomPainter {
       final clamped = local.clamp(0.0, 1.0);
       final y = clamped * piece.speed * size.height;
       final alpha = (1 - clamped).clamp(0.0, 1.0);
-      final paint = Paint()
-        ..color = piece.color.withValues(alpha: alpha);
+      final paint = Paint()..color = piece.color.withValues(alpha: alpha);
       canvas.save();
       canvas.translate(piece.x * size.width, y);
       canvas.rotate(piece.rotation + clamped * 4);
@@ -161,9 +159,8 @@ class MilestoneList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     if (milestones.isEmpty) {
       return Text(
@@ -177,8 +174,7 @@ class MilestoneList extends StatelessWidget {
       children: milestones
           .map(
             (m) => Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 color: JimColors.rose.withValues(alpha: isDark ? 0.18 : 0.08),
                 borderRadius: BorderRadius.circular(999),

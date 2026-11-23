@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 import '../main.dart';
 
@@ -17,9 +17,8 @@ class WeeklyChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
     final days = List<int>.generate(
@@ -44,14 +43,10 @@ class WeeklyChart extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
                     Container(
-                      height: max == 0
-                          ? 8
-                          : 8 + (days[i] / max) * 92,
+                      height: max == 0 ? 8 : 8 + (days[i] / max) * 92,
                       margin: const EdgeInsets.symmetric(horizontal: 6),
                       decoration: BoxDecoration(
-                        color: days[i] == 0
-                            ? line
-                            : JimColors.rose,
+                        color: days[i] == 0 ? line : JimColors.rose,
                         borderRadius: BorderRadius.circular(8),
                       ),
                     ),

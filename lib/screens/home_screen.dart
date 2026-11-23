@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/syllabus.dart';
@@ -77,6 +77,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _toastTimer;
 
   int _dailyTarget = 3;
+  int _currentIndex = 0;
   // NOTE: _dailyTarget is still the default pace for "Today's plan"
   // when no target date is set. The target CARD itself is now a manual
   // to-do list (below) — the old +/- chapter stepper is gone.
@@ -120,8 +121,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _dailyTarget = prefs.getInt('daily-target') ?? 3;
       final rawDate = prefs.getString('custom-target-date');
-      _customTargetDate =
-          rawDate == null ? null : DateTime.tryParse(rawDate);
+      _customTargetDate = rawDate == null ? null : DateTime.tryParse(rawDate);
       _milestonesShown
         ..clear()
         ..addAll(prefs.getStringList('milestones-shown-v1') ?? []);
@@ -181,9 +181,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final ref = allChapterRefs.firstWhere(
         (r) => r.chapter.id == chapterId,
       );
-      final siblings = allChapterRefs
-          .where((r) => r.subject.id == ref.subject.id)
-          .toList();
+      final siblings =
+          allChapterRefs.where((r) => r.subject.id == ref.subject.id).toList();
       final index = siblings.indexWhere(
         (r) => r.chapter.id == chapterId,
       );
@@ -209,26 +208,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _pickCustomDate() async {
     final now = DateTime.now();
-    final initial =
-        _customTargetDate ?? now.add(const Duration(days: 90));
-    DateTime? picked;
-    await showCupertinoModalPopup<void>(
+    final initial = _customTargetDate ?? now.add(const Duration(days: 90));
+    final picked = await showDatePicker(
       context: context,
-      builder: (context) => _DatePickerSheet(
-        initialDate: initial,
-        firstDate: DateTime(now.year, now.month, now.day),
-        lastDate: now.add(const Duration(days: 730)),
-        onDone: (date) => picked = date,
-      ),
+      initialDate: initial,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: now.add(const Duration(days: 730)),
     );
-    final pickedDate = picked;
-    if (pickedDate == null) return;
+    if (picked == null) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       'custom-target-date',
-      pickedDate.toIso8601String(),
+      picked.toIso8601String(),
     );
-    setState(() => _customTargetDate = pickedDate);
+    setState(() => _customTargetDate = picked);
     _showMessage('Target date saved.');
   }
 
@@ -278,7 +271,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _openSettings() {
     Navigator.of(context).push(
-      CupertinoPageRoute(
+      MaterialPageRoute(
         builder: (_) => SettingsScreen(
           dark: _effectiveDark,
           onToggleTheme: widget.onToggleTheme,
@@ -290,13 +283,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _openGroups() {
     Navigator.of(context).push(
-      CupertinoPageRoute(builder: (_) => const GroupsScreen()),
+      MaterialPageRoute(builder: (_) => const GroupsScreen()),
     );
   }
 
   void _openAdmin() {
     Navigator.of(context).push(
-      CupertinoPageRoute(builder: (_) => const AdminScreen()),
+      MaterialPageRoute(builder: (_) => const AdminScreen()),
     );
   }
 
@@ -371,15 +364,15 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final done = _store.doneCount;
-    final pct = totalMilestones == 0 ? 0 : (done * 100 / totalMilestones).round();
+    final pct =
+        totalMilestones == 0 ? 0 : (done * 100 / totalMilestones).round();
     final weakest = _store.weakestSubject(allChapterRefs);
     final today = DateTime.now();
 
     final remainingRefs = allChapterRefs
         .where((r) => _store.doneForChapter(r.chapter.id) < 6)
         .toList();
-    final remainingIds =
-        remainingRefs.map((r) => r.chapter.id).toList();
+    final remainingIds = remainingRefs.map((r) => r.chapter.id).toList();
     final daysLeft = _customTargetDate == null
         ? null
         : DailyPlan.daysLeft(
@@ -405,8 +398,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }).toList();
 
     // Spaced revision: the 5 chapters with the lowest stage completion.
-    final reviseRefs = [...allChapterRefs]
-      ..sort(
+    final reviseRefs = [...allChapterRefs]..sort(
         (a, b) => _store
             .doneForChapter(a.chapter.id)
             .compareTo(_store.doneForChapter(b.chapter.id)),
@@ -418,17 +410,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final quote = _dailyQuotes[(today.weekday - 1) % _dailyQuotes.length];
 
-    return CupertinoPageScaffold(
-      navigationBar: CupertinoNavigationBar(
-        middle: const Text('HSC Revision Master'),
-        trailing: CupertinoButton(
-          key: const Key('settings-button'),
-          padding: EdgeInsets.zero,
-          onPressed: _openSettings,
-          child: const Icon(CupertinoIcons.settings),
-        ),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('HSC Revision Master'),
+        actions: [
+          IconButton(
+            key: const Key('settings-button'),
+            onPressed: _openSettings,
+            icon: const Icon(Icons.settings),
+          ),
+        ],
       ),
-      child: SafeArea(
+      body: SafeArea(
         child: Stack(
           children: [
             Column(
@@ -441,8 +434,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       return const SizedBox.shrink();
                     }
                     final isDark =
-                        CupertinoTheme.of(context).brightness ==
-                            Brightness.dark;
+                        Theme.of(context).brightness == Brightness.dark;
                     return Container(
                       margin: const EdgeInsets.fromLTRB(24, 8, 24, 0),
                       padding: const EdgeInsets.symmetric(
@@ -459,7 +451,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: const [
                           Icon(
-                            CupertinoIcons.wifi_slash,
+                            Icons.wifi_off,
                             size: 16,
                             color: JimColors.rose,
                           ),
@@ -478,102 +470,53 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 Expanded(
                   child: _loaded
-                      ? CupertinoTabScaffold(
-                          tabBar: CupertinoTabBar(
-                            key: const Key('bottom-nav'),
-                            activeColor: _effectiveDark
-                                ? JimColors.darkText
-                                : JimColors.softBlack,
-                            inactiveColor: _effectiveDark
-                                ? JimColors.darkMuted
-                                : JimColors.muted,
-                            backgroundColor: _effectiveDark
-                                ? JimColors.darkBg
-                                : JimColors.paper,
-                            items: const [
-                              BottomNavigationBarItem(
-                                icon: Icon(CupertinoIcons.today),
-                                label: 'Today',
-                              ),
-                              BottomNavigationBarItem(
-                                icon: Icon(CupertinoIcons.book),
-                                label: 'All chapters',
-                              ),
-                              BottomNavigationBarItem(
-                                icon: Icon(CupertinoIcons.group),
-                                label: 'Community',
-                              ),
-                              BottomNavigationBarItem(
-                                icon: Icon(CupertinoIcons.person),
-                                label: 'Profile',
-                              ),
-                            ],
-                          ),
-                          tabBuilder: (context, index) {
-                            switch (index) {
-                              case 0:
-                                return CupertinoTabView(
-                                  builder: (context) => _TodayTab(
-                                    store: _store,
-                                    done: done,
-                                    pct: pct,
-                                    weakestName: weakest.nameEn,
-                                    weakestPct: _subjectPct(weakest),
-                                    dark: _effectiveDark,
-                                    onToggleTheme: _handleToggleTheme,
-                                    todos: _todos,
-                                    onAddTodo: _addTodo,
-                                    onToggleTodo: _toggleTodo,
-                                    onRemoveTodo: _removeTodo,
-                                    customTargetDate: _customTargetDate,
-                                    daysLeft: daysLeft,
-                                    perDay: perDay,
-                                    planTitles: planTitles,
-                                    reviseRefs: reviseTop5,
-                                    milestones: _earnedMilestones(),
-                                    quote: quote,
-                                    isAdmin: _isAdmin,
-                                    onPickCustomDate: _pickCustomDate,
-                                    onToggleStage: _toggleStage,
-                                    onOpenSettings: _openSettings,
-                                    onOpenGroups: _openGroups,
-                                    onOpenAdmin: _openAdmin,
-                                  ),
-                                );
-                              case 1:
-                                return CupertinoTabView(
-                                  builder: (context) => _AllTab(
-                                    store: _store,
-                                    subject: _subject,
-                                    paper: _paper,
-                                    status: _status,
-                                    searchController: _searchController,
-                                    filtered: _filtered,
-                                    onSubject: (id) =>
-                                        setState(() => _subject = id),
-                                    onQuery: (q) =>
-                                        setState(() => _query = q),
-                                    onPaper: (p) =>
-                                        setState(() => _paper = p),
-                                    onStatus: (s) =>
-                                        setState(() => _status = s),
-                                    onToggleStage: _toggleStage,
-                                  ),
-                                );
-                              case 2:
-                                return CupertinoTabView(
-                                  builder: (context) =>
-                                      const CommunityScreen(),
-                                );
-                              default:
-                                return CupertinoTabView(
-                                  builder: (context) =>
-                                      const ProfileScreen(),
-                                );
-                            }
-                          },
+                      ? IndexedStack(
+                          index: _currentIndex,
+                          children: [
+                            _TodayTab(
+                              store: _store,
+                              done: done,
+                              pct: pct,
+                              weakestName: weakest.nameEn,
+                              weakestPct: _subjectPct(weakest),
+                              dark: _effectiveDark,
+                              onToggleTheme: _handleToggleTheme,
+                              todos: _todos,
+                              onAddTodo: _addTodo,
+                              onToggleTodo: _toggleTodo,
+                              onRemoveTodo: _removeTodo,
+                              customTargetDate: _customTargetDate,
+                              daysLeft: daysLeft,
+                              perDay: perDay,
+                              planTitles: planTitles,
+                              reviseRefs: reviseTop5,
+                              milestones: _earnedMilestones(),
+                              quote: quote,
+                              isAdmin: _isAdmin,
+                              onPickCustomDate: _pickCustomDate,
+                              onToggleStage: _toggleStage,
+                              onOpenSettings: _openSettings,
+                              onOpenGroups: _openGroups,
+                              onOpenAdmin: _openAdmin,
+                            ),
+                            _AllTab(
+                              store: _store,
+                              subject: _subject,
+                              paper: _paper,
+                              status: _status,
+                              searchController: _searchController,
+                              filtered: _filtered,
+                              onSubject: (id) => setState(() => _subject = id),
+                              onQuery: (q) => setState(() => _query = q),
+                              onPaper: (p) => setState(() => _paper = p),
+                              onStatus: (s) => setState(() => _status = s),
+                              onToggleStage: _toggleStage,
+                            ),
+                            const CommunityScreen(),
+                            const ProfileScreen(showAppBar: false),
+                          ],
                         )
-                      : const Center(child: CupertinoActivityIndicator()),
+                      : const Center(child: CircularProgressIndicator()),
                 ),
               ],
             ),
@@ -600,9 +543,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       _toast!,
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: _effectiveDark
-                            ? JimColors.softBlack
-                            : CupertinoColors.white,
+                        color:
+                            _effectiveDark ? JimColors.softBlack : Colors.white,
                         fontWeight: FontWeight.w600,
                         height: 1.45,
                       ),
@@ -613,79 +555,38 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-    );
-  }
-}
-
-/// Cupertino date picker in a bottom sheet, with a Done button.
-class _DatePickerSheet extends StatefulWidget {
-  const _DatePickerSheet({
-    required this.initialDate,
-    required this.firstDate,
-    required this.lastDate,
-    required this.onDone,
-  });
-
-  final DateTime initialDate, firstDate, lastDate;
-  final ValueChanged<DateTime> onDone;
-
-  @override
-  State<_DatePickerSheet> createState() => _DatePickerSheetState();
-}
-
-class _DatePickerSheetState extends State<_DatePickerSheet> {
-  late DateTime _temp;
-
-  @override
-  void initState() {
-    super.initState();
-    _temp = widget.initialDate;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    return Container(
-      height: 340,
-      color: isDark ? JimColors.darkSurface : JimColors.card,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                CupertinoButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+      bottomNavigationBar: _loaded
+          ? NavigationBar(
+              key: const Key('bottom-nav'),
+              selectedIndex: _currentIndex,
+              onDestinationSelected: (index) =>
+                  setState(() => _currentIndex = index),
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.today),
+                  label: 'Today',
                 ),
-                CupertinoButton(
-                  onPressed: () {
-                    widget.onDone(_temp);
-                    Navigator.of(context).pop();
-                  },
-                  child: const Text('Done'),
+                NavigationDestination(
+                  icon: Icon(Icons.book),
+                  label: 'All chapters',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.group),
+                  label: 'Community',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.person),
+                  label: 'Profile',
                 ),
               ],
-            ),
-          ),
-          Expanded(
-            child: CupertinoDatePicker(
-              mode: CupertinoDatePickerMode.date,
-              initialDateTime: widget.initialDate,
-              minimumDate: widget.firstDate,
-              maximumDate: widget.lastDate,
-              onDateTimeChanged: (date) => _temp = date,
-            ),
-          ),
-        ],
-      ),
+            )
+          : null,
     );
   }
 }
 
-/// Soft rounded card in the Jim palette (replaces Material Card).
+/// Soft rounded card in the Jim palette (custom — keeps the
+/// sketchbook radius and shadow instead of a Material Card).
 /// Airy: 20px inner padding, 24px side margin, 16px between cards,
 /// 24px radius, very soft shadow and a 1px soft line.
 class _JimCard extends StatelessWidget {
@@ -696,8 +597,7 @@ class _JimCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       margin: margin ??
           const EdgeInsets.symmetric(
@@ -713,8 +613,7 @@ class _JimCard extends StatelessWidget {
         ),
         boxShadow: [
           BoxShadow(
-            color:
-                CupertinoColors.black.withValues(alpha: isDark ? 0.25 : 0.04),
+            color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.04),
             blurRadius: 16,
             offset: const Offset(0, 4),
           ),
@@ -772,9 +671,8 @@ class _StatRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -814,7 +712,7 @@ class _ProgressHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = dark ? JimColors.darkMuted : JimColors.muted;
     final line = dark ? JimColors.darkLine : JimColors.line;
     return _JimCard(
@@ -881,7 +779,7 @@ class _ProgressHeader extends StatelessWidget {
           Row(
             children: [
               Icon(
-                CupertinoIcons.moon_fill,
+                Icons.dark_mode,
                 size: 18,
                 color: muted,
               ),
@@ -892,7 +790,7 @@ class _ProgressHeader extends StatelessWidget {
                   style: base.copyWith(fontSize: 15, height: 1.45),
                 ),
               ),
-              CupertinoSwitch(
+              Switch(
                 key: const Key('theme-toggle'),
                 value: dark,
                 activeTrackColor: JimColors.rose,
@@ -943,9 +841,8 @@ class _TodayTargetCardState extends State<_TodayTargetCard> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final doneCount =
         widget.todos.where((t) => t['done'] as bool? ?? false).length;
@@ -973,14 +870,19 @@ class _TodayTargetCardState extends State<_TodayTargetCard> {
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
                 children: [
-                  CupertinoButton(
-                    padding: EdgeInsets.zero,
+                  IconButton(
                     onPressed: () => widget.onToggleTodo(id),
-                    child: Icon(
-                      done
-                          ? CupertinoIcons.checkmark_circle_fill
-                          : CupertinoIcons.circle,
-                      color: done ? JimColors.rose : muted,
+                    icon: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      transitionBuilder: (child, animation) =>
+                          ScaleTransition(scale: animation, child: child),
+                      child: Icon(
+                        done
+                            ? Icons.check_circle
+                            : Icons.radio_button_unchecked,
+                        key: ValueKey(done),
+                        color: done ? JimColors.rose : muted,
+                      ),
                     ),
                   ),
                   Expanded(
@@ -989,19 +891,17 @@ class _TodayTargetCardState extends State<_TodayTargetCard> {
                       style: base.copyWith(
                         fontSize: 15,
                         height: 1.45,
-                        decoration:
-                            done ? TextDecoration.lineThrough : null,
+                        decoration: done ? TextDecoration.lineThrough : null,
                         color: done ? muted : null,
                       ),
                     ),
                   ),
-                  CupertinoButton(
-                    padding: EdgeInsets.zero,
+                  IconButton(
                     onPressed: () => widget.onRemoveTodo(id),
-                    child: const Icon(
-                      CupertinoIcons.delete,
+                    icon: const Icon(
+                      Icons.delete,
                       size: 18,
-                      color: CupertinoColors.systemRed,
+                      color: Colors.red,
                     ),
                   ),
                 ],
@@ -1011,20 +911,29 @@ class _TodayTargetCardState extends State<_TodayTargetCard> {
           Row(
             children: [
               Expanded(
-                child: CupertinoTextField(
+                child: TextField(
                   key: const Key('todo-input'),
                   controller: _controller,
-                  placeholder: 'Add a target for today…',
+                  decoration: jimFieldDecoration(
+                    dark: isDark,
+                    hint: 'Add a target for today…',
+                  ),
                   onSubmitted: (_) => _submit(),
                 ),
               ),
               const SizedBox(width: 8),
-              CupertinoButton.filled(
+              FilledButton(
                 key: const Key('todo-add'),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                borderRadius: BorderRadius.circular(14),
                 onPressed: _submit,
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
                 child: const Text('Add'),
               ),
             ],
@@ -1087,9 +996,8 @@ class _TodayTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pending = store.pendingChapters(allChapterRefs).take(5).toList();
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
     return ListView(
@@ -1158,9 +1066,8 @@ class _TodayTab extends StatelessWidget {
                   ),
                 ),
               const SizedBox(height: 12),
-              CupertinoButton(
+              TextButton(
                 key: const Key('pick-target-date'),
-                padding: EdgeInsets.zero,
                 onPressed: onPickCustomDate,
                 child: Text(
                   customTargetDate == null
@@ -1353,20 +1260,20 @@ class _TodayTab extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               _MoreRow(
-                icon: CupertinoIcons.settings,
+                icon: Icons.settings,
                 label: 'Settings',
                 onTap: onOpenSettings,
               ),
               Container(height: 1, color: line),
               _MoreRow(
-                icon: CupertinoIcons.group,
+                icon: Icons.group,
                 label: 'Groups',
                 onTap: onOpenGroups,
               ),
               if (isAdmin) ...[
                 Container(height: 1, color: line),
                 _MoreRow(
-                  icon: CupertinoIcons.shield,
+                  icon: Icons.shield,
                   label: 'Admin panel',
                   onTap: onOpenAdmin,
                 ),
@@ -1394,7 +1301,7 @@ class _MoreRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -1410,7 +1317,7 @@ class _MoreRow extends StatelessWidget {
                 style: base.copyWith(fontSize: 15, height: 1.45),
               ),
             ),
-            const Icon(CupertinoIcons.chevron_right, size: 18),
+            const Icon(Icons.chevron_right, size: 18),
           ],
         ),
       ),
@@ -1445,20 +1352,28 @@ class _AllTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     return Column(
       children: [
         const SizedBox(height: 16),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: _pagePadding),
-          child: CupertinoSearchTextField(
+          child: TextField(
             key: const Key('search-field'),
             controller: searchController,
             onChanged: onQuery,
-            placeholder: 'Search — ভেক্টর, গতিবিদ্যা, Unit 1…',
+            decoration: jimFieldDecoration(
+              dark: isDark,
+              hint: 'Search — ভেক্টর, গতিবিদ্যা, Unit 1…',
+              borderRadius: 999,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 10,
+              ),
+              prefixIcon: const Icon(Icons.search),
+            ),
           ),
         ),
         const SizedBox(height: 16),
@@ -1488,59 +1403,75 @@ class _AllTab extends StatelessWidget {
         const SizedBox(height: 16),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: _pagePadding),
-          child: CupertinoSlidingSegmentedControl<int>(
-            key: const Key('paper-filter'),
-            groupValue: _papers.indexOf(paper),
-            backgroundColor: isDark ? JimColors.darkLine : JimColors.line,
-            thumbColor: isDark ? JimColors.darkSurface : JimColors.card,
-            children: const {
-              0: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                child: Text('All papers'),
+          child: SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<int>(
+              key: const Key('paper-filter'),
+              segments: const [
+                ButtonSegment<int>(
+                  value: 0,
+                  label: Text('All papers'),
+                ),
+                ButtonSegment<int>(
+                  value: 1,
+                  label: Text('1st paper'),
+                ),
+                ButtonSegment<int>(
+                  value: 2,
+                  label: Text('2nd paper'),
+                ),
+              ],
+              selected: {_papers.indexOf(paper)},
+              onSelectionChanged: (selection) {
+                onPaper(_papers[selection.first]);
+              },
+              style: SegmentedButton.styleFrom(
+                backgroundColor: isDark ? JimColors.darkLine : JimColors.line,
+                selectedBackgroundColor:
+                    isDark ? JimColors.darkSurface : JimColors.card,
+                selectedForegroundColor:
+                    isDark ? JimColors.darkText : JimColors.ink,
               ),
-              1: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                child: Text('1st paper'),
-              ),
-              2: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                child: Text('2nd paper'),
-              ),
-            },
-            onValueChanged: (index) {
-              if (index != null) onPaper(_papers[index]);
-            },
+            ),
           ),
         ),
         const SizedBox(height: 12),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: _pagePadding),
-          child: CupertinoSlidingSegmentedControl<int>(
-            key: const Key('status-filter'),
-            groupValue: _statuses.indexOf(status),
-            backgroundColor: isDark ? JimColors.darkLine : JimColors.line,
-            thumbColor: isDark ? JimColors.darkSurface : JimColors.card,
-            children: const {
-              0: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                child: Text('All'),
+          child: SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<int>(
+              key: const Key('status-filter'),
+              segments: const [
+                ButtonSegment<int>(
+                  value: 0,
+                  label: Text('All'),
+                ),
+                ButtonSegment<int>(
+                  value: 1,
+                  label: Text('Pending'),
+                ),
+                ButtonSegment<int>(
+                  value: 2,
+                  label: Text('In progress'),
+                ),
+                ButtonSegment<int>(
+                  value: 3,
+                  label: Text('Done'),
+                ),
+              ],
+              selected: {_statuses.indexOf(status)},
+              onSelectionChanged: (selection) {
+                onStatus(_statuses[selection.first]);
+              },
+              style: SegmentedButton.styleFrom(
+                backgroundColor: isDark ? JimColors.darkLine : JimColors.line,
+                selectedBackgroundColor:
+                    isDark ? JimColors.darkSurface : JimColors.card,
+                selectedForegroundColor:
+                    isDark ? JimColors.darkText : JimColors.ink,
               ),
-              1: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                child: Text('Pending'),
-              ),
-              2: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                child: Text('In progress'),
-              ),
-              3: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                child: Text('Done'),
-              ),
-            },
-            onValueChanged: (index) {
-              if (index != null) onStatus(_statuses[index]);
-            },
+            ),
           ),
         ),
         const SizedBox(height: 16),
@@ -1587,8 +1518,7 @@ class _Chip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 5),
       child: GestureDetector(
@@ -1616,7 +1546,7 @@ class _Chip extends StatelessWidget {
               fontWeight: FontWeight.w600,
               fontSize: 15,
               color: selected
-                  ? (isDark ? JimColors.softBlack : CupertinoColors.white)
+                  ? (isDark ? JimColors.softBlack : Colors.white)
                   : (isDark ? JimColors.darkText : JimColors.ink),
             ),
           ),
@@ -1650,9 +1580,8 @@ class _ChapterCardState extends State<_ChapterCard> {
     final store = widget.store;
     final done = store.doneForChapter(ref.chapter.id);
     final meta = subjectMeta[ref.subject.id];
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final fraction = done / revisionStages.length;
     final tip = _tipStageId == null ? null : stageTips[_tipStageId];
@@ -1688,9 +1617,7 @@ class _ChapterCardState extends State<_ChapterCard> {
                 style: base.copyWith(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
-                  color: done == revisionStages.length
-                      ? JimColors.rose
-                      : muted,
+                  color: done == revisionStages.length ? JimColors.rose : muted,
                 ),
               ),
             ],
@@ -1777,23 +1704,26 @@ class _ChapterCardState extends State<_ChapterCard> {
           const SizedBox(height: 16),
           Align(
             alignment: Alignment.centerLeft,
-            child: CupertinoButton(
+            child: FilledButton(
               key: ValueKey('note-${ref.chapter.id}'),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 6,
-              ),
-              color: isDark ? JimColors.darkBg : JimColors.paper,
-              borderRadius: BorderRadius.circular(999),
               onPressed: () => ChapterNoteSheet.show(
                 context,
                 chapterId: ref.chapter.id,
                 chapterTitle: ref.chapter.title,
               ),
+              style: FilledButton.styleFrom(
+                backgroundColor: isDark ? JimColors.darkBg : JimColors.paper,
+                foregroundColor: isDark ? JimColors.darkText : JimColors.ink,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 6,
+                ),
+                shape: const StadiumBorder(),
+              ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: const [
-                  Icon(CupertinoIcons.pencil, size: 16),
+                  Icon(Icons.edit, size: 16),
                   SizedBox(width: 6),
                   Text('Note', style: TextStyle(fontSize: 14)),
                 ],
@@ -1821,7 +1751,7 @@ class _StageChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -1846,7 +1776,7 @@ class _StageChip extends StatelessWidget {
             fontSize: 15,
             fontWeight: FontWeight.w600,
             color: isDone
-                ? CupertinoColors.white
+                ? Colors.white
                 : (isDark ? JimColors.darkText : JimColors.ink),
           ),
         ),

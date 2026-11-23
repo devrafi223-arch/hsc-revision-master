@@ -108,7 +108,14 @@ void installPinnedHttpOverrides() {
 class _PinnedHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) {
-    final client = HttpClient(context: buildPinnedContext());
+    // NEVER call HttpClient(...) here: the HttpClient factory consults
+    // HttpOverrides.global — this override — so it recursed forever and
+    // SupabaseInit.initialize() died with StackOverflowError on every
+    // start (Windows, 2026-11-23: banner "Stack Overflow", login dead).
+    // super.createHttpClient builds a REAL client directly (it does not
+    // go through the factory), so this cannot recurse. When the caller
+    // passes no context, use the pinned roots.
+    final client = super.createHttpClient(context ?? buildPinnedContext());
     client.badCertificateCallback = verifyPinnedLeaf;
     return client;
   }

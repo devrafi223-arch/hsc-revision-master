@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 import '../main.dart';
 import '../services/admin_service.dart';
@@ -10,13 +10,12 @@ class AdminScreen extends StatelessWidget {
   const AdminScreen({super.key});
 
   Future<void> _showInfo(BuildContext context, String message) async {
-    await showCupertinoDialog<void>(
+    await showDialog<void>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      builder: (context) => AlertDialog(
         content: Text(message),
         actions: [
-          CupertinoDialogAction(
-            isDefaultAction: true,
+          TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('OK'),
           ),
@@ -31,18 +30,18 @@ class AdminScreen extends StatelessWidget {
     String message,
     Future<void> Function() action,
   ) async {
-    final ok = await showCupertinoDialog<bool>(
+    final ok = await showDialog<bool>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      builder: (context) => AlertDialog(
         title: Text(title),
         content: Text(message),
         actions: [
-          CupertinoDialogAction(
+          TextButton(
             onPressed: () => Navigator.of(context).pop(false),
             child: const Text('Cancel'),
           ),
-          CupertinoDialogAction(
-            isDestructiveAction: true,
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
             onPressed: () => Navigator.of(context).pop(true),
             child: const Text('Confirm'),
           ),
@@ -58,9 +57,8 @@ class AdminScreen extends StatelessWidget {
     String label,
     int value,
   ) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
     return Expanded(
@@ -92,16 +90,15 @@ class AdminScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final uid = AuthService.instance.currentUid;
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
-    return CupertinoPageScaffold(
-      navigationBar: const CupertinoNavigationBar(
-        middle: Text('Admin panel'),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Admin panel'),
       ),
-      child: SafeArea(
+      body: SafeArea(
         child: uid == null
             ? Center(
                 child: Padding(
@@ -122,7 +119,7 @@ class AdminScreen extends StatelessWidget {
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) {
                     return const Center(
-                      child: CupertinoActivityIndicator(),
+                      child: CircularProgressIndicator(),
                     );
                   }
                   if (snapshot.data != true) {
@@ -212,7 +209,7 @@ class AdminScreen extends StatelessWidget {
                         builder: (context, snapshot) {
                           if (!snapshot.hasData) {
                             return const Center(
-                              child: CupertinoActivityIndicator(),
+                              child: CircularProgressIndicator(),
                             );
                           }
                           final reports = snapshot.data!;
@@ -228,8 +225,7 @@ class AdminScreen extends StatelessWidget {
                           }
                           return Column(
                             children: reports.map((report) {
-                              final reportId =
-                                  (report['id'] as String?) ?? '';
+                              final reportId = (report['id'] as String?) ?? '';
                               final messageId =
                                   (report['messageId'] as String?) ?? '';
                               final reason =
@@ -241,10 +237,9 @@ class AdminScreen extends StatelessWidget {
                               // (key name depends on the backend); mute/ban
                               // need it, so the buttons fall back to an
                               // explanation when it is missing.
-                              final userUid =
-                                  (report['authorId'] as String?) ??
-                                      (report['userId'] as String?) ??
-                                      (report['reporterUid'] as String?);
+                              final userUid = (report['authorId'] as String?) ??
+                                  (report['userId'] as String?) ??
+                                  (report['reporterUid'] as String?);
                               return Container(
                                 margin: const EdgeInsets.only(bottom: 12),
                                 padding: const EdgeInsets.all(16),
@@ -256,8 +251,7 @@ class AdminScreen extends StatelessWidget {
                                   border: Border.all(color: line),
                                 ),
                                 child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
                                       reason,
@@ -280,16 +274,7 @@ class AdminScreen extends StatelessWidget {
                                       spacing: 8,
                                       runSpacing: 8,
                                       children: [
-                                        CupertinoButton(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 14,
-                                            vertical: 6,
-                                          ),
-                                          color: isDark
-                                              ? JimColors.darkBg
-                                              : JimColors.paper,
-                                          borderRadius:
-                                              BorderRadius.circular(999),
+                                        FilledButton(
                                           onPressed: () => _confirm(
                                             context,
                                             'Delete this message?',
@@ -297,21 +282,25 @@ class AdminScreen extends StatelessWidget {
                                             () => AdminService.instance
                                                 .deleteMessage(messageId),
                                           ),
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor: isDark
+                                                ? JimColors.darkBg
+                                                : JimColors.paper,
+                                            foregroundColor: isDark
+                                                ? JimColors.darkText
+                                                : JimColors.ink,
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 14,
+                                              vertical: 6,
+                                            ),
+                                            shape: const StadiumBorder(),
+                                          ),
                                           child: const Text(
                                             'Delete message',
                                             style: TextStyle(fontSize: 14),
                                           ),
                                         ),
-                                        CupertinoButton(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 14,
-                                            vertical: 6,
-                                          ),
-                                          color: isDark
-                                              ? JimColors.darkBg
-                                              : JimColors.paper,
-                                          borderRadius:
-                                              BorderRadius.circular(999),
+                                        FilledButton(
                                           onPressed: () {
                                             if (userUid == null ||
                                                 userUid.isEmpty) {
@@ -329,21 +318,25 @@ class AdminScreen extends StatelessWidget {
                                                   .muteUser(userUid),
                                             );
                                           },
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor: isDark
+                                                ? JimColors.darkBg
+                                                : JimColors.paper,
+                                            foregroundColor: isDark
+                                                ? JimColors.darkText
+                                                : JimColors.ink,
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 14,
+                                              vertical: 6,
+                                            ),
+                                            shape: const StadiumBorder(),
+                                          ),
                                           child: const Text(
                                             'Mute user',
                                             style: TextStyle(fontSize: 14),
                                           ),
                                         ),
-                                        CupertinoButton(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 14,
-                                            vertical: 6,
-                                          ),
-                                          color: isDark
-                                              ? JimColors.darkBg
-                                              : JimColors.paper,
-                                          borderRadius:
-                                              BorderRadius.circular(999),
+                                        FilledButton(
                                           onPressed: () {
                                             if (userUid == null ||
                                                 userUid.isEmpty) {
@@ -361,6 +354,19 @@ class AdminScreen extends StatelessWidget {
                                                   .banUser(userUid),
                                             );
                                           },
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor: isDark
+                                                ? JimColors.darkBg
+                                                : JimColors.paper,
+                                            foregroundColor: isDark
+                                                ? JimColors.darkText
+                                                : JimColors.ink,
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 14,
+                                              vertical: 6,
+                                            ),
+                                            shape: const StadiumBorder(),
+                                          ),
                                           child: const Text(
                                             'Ban user',
                                             style: TextStyle(fontSize: 14),
@@ -401,23 +407,19 @@ class AdminScreen extends StatelessWidget {
                               children: [
                                 _AnalyticsRow(
                                   label: 'Registered users',
-                                  value:
-                                      '${stats['totalUsers'] ?? 0}',
+                                  value: '${stats['totalUsers'] ?? 0}',
                                 ),
                                 _AnalyticsRow(
                                   label: 'Messages sent',
-                                  value:
-                                      '${stats['totalMessages'] ?? 0}',
+                                  value: '${stats['totalMessages'] ?? 0}',
                                 ),
                                 _AnalyticsRow(
                                   label: 'Reports filed',
-                                  value:
-                                      '${stats['totalReports'] ?? 0}',
+                                  value: '${stats['totalReports'] ?? 0}',
                                 ),
                                 _AnalyticsRow(
                                   label: 'Active today',
-                                  value:
-                                      '${stats['activeToday'] ?? 0}',
+                                  value: '${stats['activeToday'] ?? 0}',
                                 ),
                               ],
                             ),
@@ -440,9 +442,8 @@ class _AnalyticsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),

@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../main.dart';
@@ -14,27 +14,29 @@ class GroupsScreen extends StatelessWidget {
 
   Future<void> _createGroup(BuildContext context) async {
     final controller = TextEditingController();
-    final name = await showCupertinoDialog<String>(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final name = await showDialog<String>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      builder: (context) => AlertDialog(
         title: const Text('Create a group'),
         content: Padding(
           padding: const EdgeInsets.only(top: 12),
-          child: CupertinoTextField(
+          child: TextField(
             controller: controller,
-            placeholder: 'Group name',
-            padding: const EdgeInsets.all(12),
+            decoration: jimFieldDecoration(
+              dark: isDark,
+              hint: 'Group name',
+              contentPadding: const EdgeInsets.all(12),
+            ),
           ),
         ),
         actions: [
-          CupertinoDialogAction(
+          TextButton(
             onPressed: () => Navigator.of(context).pop(null),
             child: const Text('Cancel'),
           ),
-          CupertinoDialogAction(
-            isDefaultAction: true,
-            onPressed: () =>
-                Navigator.of(context).pop(controller.text.trim()),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
             child: const Text('Create'),
           ),
         ],
@@ -45,16 +47,15 @@ class GroupsScreen extends StatelessWidget {
     try {
       final code = await GroupsService.instance.createGroup(name);
       if (!context.mounted) return;
-      await showCupertinoDialog<void>(
+      await showDialog<void>(
         context: context,
-        builder: (context) => CupertinoAlertDialog(
+        builder: (context) => AlertDialog(
           title: const Text('Group created'),
           content: Text(
             '"$name" is ready. Share this code so friends can join:\n$code',
           ),
           actions: [
-            CupertinoDialogAction(
-              isDefaultAction: true,
+            TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('Done'),
             ),
@@ -63,14 +64,13 @@ class GroupsScreen extends StatelessWidget {
       );
     } catch (e) {
       if (!context.mounted) return;
-      await showCupertinoDialog<void>(
+      await showDialog<void>(
         context: context,
-        builder: (context) => CupertinoAlertDialog(
+        builder: (context) => AlertDialog(
           title: const Text('Could not create the group'),
           content: Text(e.toString()),
           actions: [
-            CupertinoDialogAction(
-              isDefaultAction: true,
+            TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('OK'),
             ),
@@ -82,28 +82,30 @@ class GroupsScreen extends StatelessWidget {
 
   Future<void> _joinGroup(BuildContext context) async {
     final controller = TextEditingController();
-    final code = await showCupertinoDialog<String>(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final code = await showDialog<String>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      builder: (context) => AlertDialog(
         title: const Text('Join a group'),
         content: Padding(
           padding: const EdgeInsets.only(top: 12),
-          child: CupertinoTextField(
+          child: TextField(
             controller: controller,
-            placeholder: '6-character code',
             textCapitalization: TextCapitalization.characters,
-            padding: const EdgeInsets.all(12),
+            decoration: jimFieldDecoration(
+              dark: isDark,
+              hint: '6-character code',
+              contentPadding: const EdgeInsets.all(12),
+            ),
           ),
         ),
         actions: [
-          CupertinoDialogAction(
+          TextButton(
             onPressed: () => Navigator.of(context).pop(null),
             child: const Text('Cancel'),
           ),
-          CupertinoDialogAction(
-            isDefaultAction: true,
-            onPressed: () =>
-                Navigator.of(context).pop(controller.text.trim()),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
             child: const Text('Join'),
           ),
         ],
@@ -113,9 +115,9 @@ class GroupsScreen extends StatelessWidget {
     if (code == null || code.isEmpty || !context.mounted) return;
     final joined = await GroupsService.instance.joinGroup(code);
     if (!context.mounted) return;
-    await showCupertinoDialog<void>(
+    await showDialog<void>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      builder: (context) => AlertDialog(
         title: Text(joined ? 'Joined!' : 'Could not join'),
         content: Text(
           joined
@@ -123,8 +125,7 @@ class GroupsScreen extends StatelessWidget {
               : 'No group uses that code. Check it and try again.',
         ),
         actions: [
-          CupertinoDialogAction(
-            isDefaultAction: true,
+          TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('OK'),
           ),
@@ -135,16 +136,15 @@ class GroupsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
-    return CupertinoPageScaffold(
-      navigationBar: const CupertinoNavigationBar(
-        middle: Text('Groups'),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Groups'),
       ),
-      child: SafeArea(
+      body: SafeArea(
         child: Column(
           children: [
             Padding(
@@ -152,18 +152,29 @@ class GroupsScreen extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: CupertinoButton.filled(
-                      borderRadius: BorderRadius.circular(14),
+                    child: FilledButton(
                       onPressed: () => _createGroup(context),
+                      style: FilledButton.styleFrom(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
                       child: const Text('Create group'),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: CupertinoButton(
-                      color: isDark ? JimColors.darkSurface : JimColors.card,
-                      borderRadius: BorderRadius.circular(14),
+                    child: FilledButton.tonal(
                       onPressed: () => _joinGroup(context),
+                      style: FilledButton.styleFrom(
+                        backgroundColor:
+                            isDark ? JimColors.darkSurface : JimColors.card,
+                        foregroundColor:
+                            isDark ? JimColors.darkText : JimColors.ink,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
                       child: const Text('Join group'),
                     ),
                   ),
@@ -191,7 +202,7 @@ class GroupsScreen extends StatelessWidget {
                   }
                   if (!snapshot.hasData) {
                     return const Center(
-                      child: CupertinoActivityIndicator(),
+                      child: CircularProgressIndicator(),
                     );
                   }
                   final groups = snapshot.data!;
@@ -221,7 +232,7 @@ class GroupsScreen extends StatelessWidget {
                       return GestureDetector(
                         onTap: () {
                           Navigator.of(context).push(
-                            CupertinoPageRoute(
+                            MaterialPageRoute(
                               builder: (_) => GroupDetailScreen(
                                 groupName: name,
                                 code: code,
@@ -233,9 +244,8 @@ class GroupsScreen extends StatelessWidget {
                           margin: const EdgeInsets.only(bottom: 16),
                           padding: const EdgeInsets.all(20),
                           decoration: BoxDecoration(
-                            color: isDark
-                                ? JimColors.darkSurface
-                                : JimColors.card,
+                            color:
+                                isDark ? JimColors.darkSurface : JimColors.card,
                             borderRadius: BorderRadius.circular(24),
                             border: Border.all(color: line),
                           ),
@@ -243,8 +253,7 @@ class GroupsScreen extends StatelessWidget {
                             children: [
                               Expanded(
                                 child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
                                       name,
@@ -265,7 +274,7 @@ class GroupsScreen extends StatelessWidget {
                                   ],
                                 ),
                               ),
-                              const Icon(CupertinoIcons.chevron_right),
+                              const Icon(Icons.chevron_right),
                             ],
                           ),
                         ),
@@ -318,16 +327,15 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       // Sending a group note is best effort; the offline queue
       // (SyncService) retries it when the connection returns.
       if (mounted) {
-        await showCupertinoDialog<void>(
+        await showDialog<void>(
           context: context,
-          builder: (context) => CupertinoAlertDialog(
+          builder: (context) => AlertDialog(
             title: const Text('Note not sent'),
             content: const Text(
               'Check your connection — it will sync when back online.',
             ),
             actions: [
-              CupertinoDialogAction(
-                isDefaultAction: true,
+              TextButton(
                 onPressed: () => Navigator.of(context).pop(),
                 child: const Text('OK'),
               ),
@@ -352,39 +360,45 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
-    return CupertinoPageScaffold(
-      navigationBar: CupertinoNavigationBar(
-        middle: Text(widget.groupName),
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.groupName),
       ),
-      child: SafeArea(
+      body: SafeArea(
         child: Column(
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
-              child: CupertinoSlidingSegmentedControl<int>(
-                groupValue: _segment,
-                backgroundColor: isDark ? JimColors.darkLine : JimColors.line,
-                thumbColor: isDark ? JimColors.darkSurface : JimColors.card,
-                children: const {
-                  0: Padding(
-                    padding:
-                        EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                    child: Text('Members'),
+              child: SizedBox(
+                width: double.infinity,
+                child: SegmentedButton<int>(
+                  segments: const [
+                    ButtonSegment<int>(
+                      value: 0,
+                      label: Text('Members'),
+                    ),
+                    ButtonSegment<int>(
+                      value: 1,
+                      label: Text('Notes'),
+                    ),
+                  ],
+                  selected: {_segment},
+                  onSelectionChanged: (selection) {
+                    setState(() => _segment = selection.first);
+                  },
+                  style: SegmentedButton.styleFrom(
+                    backgroundColor:
+                        isDark ? JimColors.darkLine : JimColors.line,
+                    selectedBackgroundColor:
+                        isDark ? JimColors.darkSurface : JimColors.card,
+                    selectedForegroundColor:
+                        isDark ? JimColors.darkText : JimColors.ink,
                   ),
-                  1: Padding(
-                    padding:
-                        EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                    child: Text('Notes'),
-                  ),
-                },
-                onValueChanged: (index) {
-                  if (index != null) setState(() => _segment = index);
-                },
+                ),
               ),
             ),
             if (_segment == 0)
@@ -431,13 +445,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                           }
                           if (!snapshot.hasData) {
                             return const Center(
-                              child: CupertinoActivityIndicator(),
+                              child: CircularProgressIndicator(),
                             );
                           }
-                          final messages = [...snapshot.data!]
-                            ..sort(
-                              (a, b) =>
-                                  a.timestamp.compareTo(b.timestamp),
+                          final messages = [...snapshot.data!]..sort(
+                              (a, b) => a.timestamp.compareTo(b.timestamp),
                             );
                           if (messages.isEmpty) {
                             return Center(
@@ -456,8 +468,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                             );
                           }
                           return ListView.builder(
-                            padding:
-                                const EdgeInsets.fromLTRB(24, 8, 24, 16),
+                            padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
                             itemCount: messages.length,
                             itemBuilder: (context, index) {
                               final message = messages[index];
@@ -493,8 +504,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                   border: Border.all(color: line),
                                 ),
                                 child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
                                       message.authorName,
@@ -524,42 +534,36 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                     ),
                     Container(
                       decoration: BoxDecoration(
-                        color:
-                            isDark ? JimColors.darkSurface : JimColors.card,
+                        color: isDark ? JimColors.darkSurface : JimColors.card,
                         border: Border(top: BorderSide(color: line)),
                       ),
                       padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
                       child: Row(
                         children: [
-                          CupertinoButton(
-                            padding: EdgeInsets.zero,
+                          IconButton(
                             onPressed: _sendNotePhoto,
-                            child: const Icon(CupertinoIcons.photo),
+                            icon: const Icon(Icons.photo),
                           ),
                           Expanded(
-                            child: CupertinoTextField(
+                            child: TextField(
                               controller: _noteController,
-                              placeholder: 'Write a group note…',
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isDark
-                                    ? JimColors.darkBg
-                                    : JimColors.paper,
-                                borderRadius: BorderRadius.circular(999),
-                                border: Border.all(color: line),
+                              decoration: jimFieldDecoration(
+                                dark: isDark,
+                                hint: 'Write a group note…',
+                                borderRadius: 999,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 10,
+                                ),
                               ),
                               onSubmitted: (_) => _sendNote(),
                             ),
                           ),
                           const SizedBox(width: 4),
-                          CupertinoButton(
-                            padding: EdgeInsets.zero,
+                          IconButton(
                             onPressed: _sendNote,
-                            child: const Icon(
-                              CupertinoIcons.arrow_up_circle_fill,
+                            icon: const Icon(
+                              Icons.arrow_circle_up,
                             ),
                           ),
                         ],

@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../main.dart';
@@ -41,11 +41,11 @@ class SettingsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CupertinoPageScaffold(
-      navigationBar: const CupertinoNavigationBar(
-        middle: Text('Settings'),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Settings'),
       ),
-      child: SafeArea(
+      body: SafeArea(
         child: _SettingsBody(
           dark: dark,
           onToggleTheme: onToggleTheme,
@@ -91,8 +91,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
       _notifReplies = prefs.getBool('notif-replies') ?? true;
       _fontSize = prefs.getString('font-size') ?? 'medium';
       _lang = prefs.getString('app-lang') ?? 'en';
-      SettingsScreen.fontScale =
-          SettingsScreen._fontScales[_fontSize] ?? 1.0;
+      SettingsScreen.fontScale = SettingsScreen._fontScales[_fontSize] ?? 1.0;
       _loaded = true;
     });
   }
@@ -112,31 +111,34 @@ class _SettingsBodyState extends State<_SettingsBody> {
   Future<void> _confirmReset() async {
     final controller = TextEditingController();
     var typed = '';
-    final confirmed = await showCupertinoDialog<bool>(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => CupertinoAlertDialog(
+        builder: (context, setDialogState) => AlertDialog(
           title: const Text('Reset all progress?'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                  'Every tick will be cleared. This cannot be undone.'),
+              const Text('Every tick will be cleared. This cannot be undone.'),
               const SizedBox(height: 12),
-              CupertinoTextField(
+              TextField(
                 controller: controller,
-                placeholder: 'Type Confirm',
+                decoration: jimFieldDecoration(
+                  dark: isDark,
+                  hint: 'Type Confirm',
+                ),
                 onChanged: (value) => setDialogState(() => typed = value),
               ),
             ],
           ),
           actions: [
-            CupertinoDialogAction(
+            TextButton(
               onPressed: () => Navigator.of(context).pop(false),
               child: const Text('Cancel'),
             ),
-            CupertinoDialogAction(
-              isDestructiveAction: true,
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
               onPressed: typed == 'Confirm'
                   ? () => Navigator.of(context).pop(true)
                   : null,
@@ -154,7 +156,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
   }
 
   Widget _sectionTitle(BuildContext context, String title) {
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
       child: Text(
@@ -170,9 +172,8 @@ class _SettingsBodyState extends State<_SettingsBody> {
     required bool value,
     required ValueChanged<bool> onChanged,
   }) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
     return Container(
@@ -206,7 +207,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
             ),
           ),
           const SizedBox(width: 12),
-          CupertinoSwitch(
+          Switch(
             value: value,
             activeTrackColor: JimColors.rose,
             onChanged: onChanged,
@@ -218,12 +219,11 @@ class _SettingsBodyState extends State<_SettingsBody> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     if (!_loaded) {
-      return const Center(child: CupertinoActivityIndicator());
+      return const Center(child: CircularProgressIndicator());
     }
     return ListView(
       padding: const EdgeInsets.only(bottom: 24),
@@ -261,57 +261,73 @@ class _SettingsBodyState extends State<_SettingsBody> {
         _sectionTitle(context, 'Font size'),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: CupertinoSlidingSegmentedControl<String>(
-            groupValue: _fontSize,
-            backgroundColor: isDark ? JimColors.darkLine : JimColors.line,
-            thumbColor: isDark ? JimColors.darkSurface : JimColors.card,
-            children: const {
-              'small': Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Text('Small'),
+          child: SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<String>(
+              segments: const [
+                ButtonSegment<String>(
+                  value: 'small',
+                  label: Text('Small'),
+                ),
+                ButtonSegment<String>(
+                  value: 'medium',
+                  label: Text('Medium'),
+                ),
+                ButtonSegment<String>(
+                  value: 'large',
+                  label: Text('Large'),
+                ),
+              ],
+              selected: {_fontSize},
+              onSelectionChanged: (selection) {
+                final value = selection.first;
+                setState(() {
+                  _fontSize = value;
+                  SettingsScreen.fontScale =
+                      SettingsScreen._fontScales[value] ?? 1.0;
+                });
+                _saveString('font-size', value);
+              },
+              style: SegmentedButton.styleFrom(
+                backgroundColor: isDark ? JimColors.darkLine : JimColors.line,
+                selectedBackgroundColor:
+                    isDark ? JimColors.darkSurface : JimColors.card,
+                selectedForegroundColor:
+                    isDark ? JimColors.darkText : JimColors.ink,
               ),
-              'medium': Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Text('Medium'),
-              ),
-              'large': Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Text('Large'),
-              ),
-            },
-            onValueChanged: (value) {
-              if (value == null) return;
-              setState(() {
-                _fontSize = value;
-                SettingsScreen.fontScale =
-                    SettingsScreen._fontScales[value] ?? 1.0;
-              });
-              _saveString('font-size', value);
-            },
+            ),
           ),
         ),
         _sectionTitle(context, 'Language'),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: CupertinoSlidingSegmentedControl<String>(
-            groupValue: _lang,
-            backgroundColor: isDark ? JimColors.darkLine : JimColors.line,
-            thumbColor: isDark ? JimColors.darkSurface : JimColors.card,
-            children: const {
-              'en': Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                child: Text('English'),
+          child: SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<String>(
+              segments: const [
+                ButtonSegment<String>(
+                  value: 'en',
+                  label: Text('English'),
+                ),
+                ButtonSegment<String>(
+                  value: 'bn',
+                  label: Text('বাংলা'),
+                ),
+              ],
+              selected: {_lang},
+              onSelectionChanged: (selection) {
+                final value = selection.first;
+                setState(() => _lang = value);
+                _saveString('app-lang', value);
+              },
+              style: SegmentedButton.styleFrom(
+                backgroundColor: isDark ? JimColors.darkLine : JimColors.line,
+                selectedBackgroundColor:
+                    isDark ? JimColors.darkSurface : JimColors.card,
+                selectedForegroundColor:
+                    isDark ? JimColors.darkText : JimColors.ink,
               ),
-              'bn': Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                child: Text('বাংলা'),
-              ),
-            },
-            onValueChanged: (value) {
-              if (value == null) return;
-              setState(() => _lang = value);
-              _saveString('app-lang', value);
-            },
+            ),
           ),
         ),
         Padding(
@@ -345,45 +361,48 @@ class _SettingsBodyState extends State<_SettingsBody> {
               color: isDark ? JimColors.darkSurface : JimColors.card,
               borderRadius: BorderRadius.circular(24),
               border: Border.all(
-                color: CupertinoColors.systemRed.withValues(alpha: 0.4),
+                color: Colors.red.withValues(alpha: 0.4),
               ),
             ),
-            child: CupertinoButton(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              onPressed: _confirmReset,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Reset all progress',
-                          style: base.copyWith(
-                            fontSize: 15,
-                            color: CupertinoColors.systemRed,
-                            height: 1.45,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(24),
+              onTap: _confirmReset,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Reset all progress',
+                            style: base.copyWith(
+                              fontSize: 15,
+                              color: Colors.red,
+                              height: 1.45,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Clears every tick. Cannot be undone — type Confirm to proceed.',
-                          style: base.copyWith(
-                            fontSize: 13,
-                            color: muted,
-                            height: 1.45,
+                          const SizedBox(height: 2),
+                          Text(
+                            'Clears every tick. Cannot be undone — type Confirm to proceed.',
+                            style: base.copyWith(
+                              fontSize: 13,
+                              color: muted,
+                              height: 1.45,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  const Icon(
-                    CupertinoIcons.chevron_right,
-                    size: 18,
-                    color: CupertinoColors.systemRed,
-                  ),
-                ],
+                    const Icon(
+                      Icons.chevron_right,
+                      size: 18,
+                      color: Colors.red,
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

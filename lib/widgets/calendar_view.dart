@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 import '../main.dart';
 
@@ -25,8 +25,18 @@ class _CalendarViewState extends State<CalendarView> {
   }
 
   static const List<String> _monthNames = [
-    'January', 'February', 'March', 'April', 'May', 'June', 'July',
-    'August', 'September', 'October', 'November', 'December',
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
   ];
 
   bool _isCompleted(DateTime day) {
@@ -37,9 +47,8 @@ class _CalendarViewState extends State<CalendarView> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark =
-        CupertinoTheme.of(context).brightness == Brightness.dark;
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
     final today = DateTime.now();
@@ -66,13 +75,9 @@ class _CalendarViewState extends State<CalendarView> {
               height: 36,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: isToday
-                    ? JimColors.rose
-                    : const Color(0x00000000),
+                color: isToday ? JimColors.rose : const Color(0x00000000),
                 shape: BoxShape.circle,
-                border: isToday
-                    ? null
-                    : Border.all(color: line),
+                border: isToday ? null : Border.all(color: line),
               ),
               child: Text(
                 '$day',
@@ -80,7 +85,7 @@ class _CalendarViewState extends State<CalendarView> {
                   fontSize: 14,
                   fontWeight: isToday ? FontWeight.w600 : FontWeight.w400,
                   color: isToday
-                      ? CupertinoColors.white
+                      ? Colors.white
                       : (isDark ? JimColors.darkText : JimColors.ink),
                 ),
               ),
@@ -109,19 +114,17 @@ class _CalendarViewState extends State<CalendarView> {
                 style: base.copyWith(fontSize: 16, fontWeight: FontWeight.w600),
               ),
             ),
-            CupertinoButton(
-              padding: EdgeInsets.zero,
+            IconButton(
               onPressed: () => setState(() {
                 _month = DateTime(_month.year, _month.month - 1);
               }),
-              child: const Icon(CupertinoIcons.chevron_left),
+              icon: const Icon(Icons.chevron_left),
             ),
-            CupertinoButton(
-              padding: EdgeInsets.zero,
+            IconButton(
               onPressed: () => setState(() {
                 _month = DateTime(_month.year, _month.month + 1);
               }),
-              child: const Icon(CupertinoIcons.chevron_right),
+              icon: const Icon(Icons.chevron_right),
             ),
           ],
         ),
