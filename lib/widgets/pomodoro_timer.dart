@@ -93,8 +93,8 @@ class _PomodoroTimerState extends State<PomodoroTimer> {
           _remaining <= Duration.zero
               ? 'Done — take a 5-minute break.'
               : _running
-                  ? 'Focus — no phone, just this chapter.'
-                  : 'Pomodoro — 25 minutes of focused revision.',
+                  ? 'Keep going — just this chapter.'
+                  : 'Pomodoro — 25 minutes of revision.',
           key: const Key('pomodoro-time'),
           style: textStyle.copyWith(height: 1.45),
         ),

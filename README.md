@@ -8,7 +8,7 @@ verified against the original repo — no chapter invented.
 
 The whole UI is Apple-style Cupertino: `CupertinoApp`, `CupertinoPageScaffold`
 with a large-title-style navigation bar, `CupertinoTabScaffold` +
-`CupertinoTabBar` (Today / All chapters / Focus / Exam plan), `CupertinoButton.filled`
+`CupertinoTabBar` (Today / All chapters / Exam plan), `CupertinoButton.filled`
 for primary actions, `CupertinoSearchTextField`,
 `CupertinoSlidingSegmentedControl` for the paper/status filters,
 `CupertinoSwitch` for night mode, `CupertinoDatePicker` in a modal sheet for
@@ -46,47 +46,6 @@ rose progress bar; a stage's tip appears only when its chip is tapped.
   Live, Test Paper) in 3-per-row rows, search (Bangla + English), subject chips, paper filter,
   status filter (All / Pending / In progress / Done)
 - 25-minute Pomodoro timer (Start / Pause / Reset)
-- **Focus Mode** (Focus tab): 15/25/45/60-minute sessions with a
-  whitelist of apps that stay usable, an optional **locked** mode
-  ("can't end early" — the End button stays off until the timer
-  finishes, and killing the app does not cancel it), and a **weekly
-  schedule** (Cold Turkey-style 15-minute blocks, edited as 1-hour
-  cells, e.g. weekdays 8:00–13:00) that auto-starts focus inside a
-  blocked run. **Android only**, a native
-  `FocusAccessibilityService` watches the foreground app while a session
-  or a scheduled block is on and shows a calm full-screen block overlay
-  over any app that is not this app or whitelisted ("Focus cholche — ei
-  app-ta ekhon bondho", with remaining time and an End focus button,
-  hidden while locked). Needs two permissions the app guides you to:
-  the Accessibility service and "Draw over other apps" — blocking is
-  never claimed to work until both are on. Sideloaded APKs on Android
-  13+ also need the "Allow restricted settings" step in App info before
-  the Accessibility switch works — the app shows the exact steps.
-  Stale sessions self-clear, so blocking can never stay on forever if
-  the app is killed mid-focus. On web / Windows / Linux there is no
-  system blocking: focus hides the other tabs and shows only the current
-  chapter + timer. Whitelist, sessions, locked flag, schedule and caps
-  live in SharedPreferences (`focus-whitelist-v1`, `focus-end-v1`,
-  `focus-locked-v1`, `focus-schedule-v1`, `focus-caps-v1`).
-- **Daily limits** (Android): per-app daily foreground-minute caps
-  (UsageStatsManager). A cap blocks the app for the rest of the day
-  once it is used up — even outside a focus session, and even if the
-  app is whitelisted. Needs the Usage access permission.
-- **PC blocking** (Windows/Linux, best effort): while focus is on,
-  the app polls the foreground window (Win32 FFI on Windows,
-  wmctrl/xdotool on Linux) and politely asks a blocked app to close
-  (WM_CLOSE) while bringing this app to the front; a floating
-  mini-player was deliberately skipped (needs another window plugin).
-  A desktop whitelist (exe names) and hosts-file website blocking
-  (YouTube, Facebook, Instagram, TikTok, X, Reddit, Netflix → 127.0.0.1)
-  are on the Focus tab — the hosts write needs administrator rights and
-  stays off with an explanation when they are missing. Honest limits,
-  stated in the app: Task Manager can always close this app, Wayland
-  restricts window listing on Linux, and true Cold Turkey-grade lock-in
-  would need an admin-installed native helper this app does not have.
-  The same honest-limits note is on the phone side: force-stop,
-  turning Accessibility off, uninstalling, or safe mode all stop the
-  blocking.
 - Exam plan tab: HSC 2026 reference dates and marks. HSC 2027 routine was
   **not** published at research time (Nov 2026) — no 2027 date is invented.
 - Share: WhatsApp-ready summary copied to clipboard; JSON backup export
@@ -117,13 +76,80 @@ Each build is uploaded as a workflow artifact. No iOS/macOS jobs.
 ## Tests
 
 ```sh
-flutter test   # widget tests: stage toggle, subject chip, search,
-               # theme toggle, bottom nav, Pomodoro countdown/pause/reset,
-               # focus store persistence, stale-session clearing,
-               # focus start/end, tab hiding on non-Android, schedule
-               # persistence + auto-start, locked sessions, daily caps,
-               # desktop whitelist, hosts-file block on a temp file
+flutter test   # widget tests: syllabus count, stage toggle, subject chip,
+               # search, paper filter, theme toggle, bottom nav,
+               # Pomodoro countdown/pause/reset
 ```
+
+## Firebase setup (required for online features)
+
+The app runs in **LOCAL-ONLY mode** until you connect a real Firebase
+project. In local-only mode everything on-device works — tracker progress,
+Pomodoro, per-chapter notes, milestones, badges, daily plan — but accounts,
+community, groups, leaderboard, cloud sync and push notifications do not.
+
+### What works offline vs what needs config
+
+| Works offline (no setup) | Needs Firebase config |
+|---|---|
+| Tracker progress (151 chapters / 906 milestones) | Email + OTP registration, Google sign-in |
+| Per-chapter notes (text + photo, on-device) | Universal community, polls, voice messages |
+| Milestones + badges, streak, daily target plan | Leaderboard, follow, profiles, cover photo |
+| Offline queue — work done offline auto-syncs later | Groups (6-char join codes), admin panel, FCM |
+
+### Steps (Rafi)
+
+1. Go to https://console.firebase.google.com and create a project
+   (any name, e.g. `hsc-revision-master`).
+2. **Add an Android app**: package name `com.example.hsc_revision_master`
+   (or your own id — it must match `android/app/build.gradle.kts`).
+   Download `google-services.json` into `android/app/`.
+3. **Add a Web app** in the same project. Copy the config values it shows
+   (`apiKey`, `appId`, `messagingSenderId`, `projectId`, `storageBucket`)
+   into `lib/firebase_options.dart`, replacing every
+   `TODO — replace with real Firebase project config` value.
+   (Or run `flutterfire configure` to regenerate that file.)
+4. **Authentication**: in the Firebase console → Authentication →
+   Sign-in method → enable **Email/Password** and **Google**.
+5. **Firestore**: console → Firestore Database → Create database
+   (production mode; the app creates collections `users`, `messages`,
+   `notes`, `groups`, `reports`, `email_otps` itself).
+6. **Storage**: console → Storage → Get started (default bucket).
+   The app uploads to `community/...` and `notes/<uid>/<chapterId>.jpg`.
+7. **FCM**: console → Cloud Messaging — no extra step for Android;
+   for Web, FCM needs a `firebase-messaging-sw.js` service worker
+   (not included yet — push on web is a TODO).
+8. Run `flutter pub get` and rebuild. When the real config is in place,
+   `FirebaseInit.isOnlineMode` becomes true and the auth screen appears.
+
+### Local-fallback admin
+
+The first user to register on a fresh install becomes the admin on that
+device (uid stored in SharedPreferences key `first-user-uid`) until a real
+flag is set. To make an admin properly, set `isAdmin: true` on that user's
+document in Firestore collection `users` in the console.
+
+### Known TODOs / honest limits
+
+- **OTP email sending is NOT implemented**: `AuthService.sendOtp` only
+  stores a SHA-256 hash + 10-minute expiry in Firestore collection
+  `email_otps`. Firebase Auth cannot send a custom OTP email, so a backend
+  (Cloud Function / small server + SMTP) is needed to actually email the
+  code. In local-only mode the plain code is stored under
+  `demo-otp-<email>` in SharedPreferences so the UI can show it labelled
+  "demo code (no email configured)" — in online mode the code is never
+  shown anywhere.
+- **Voice recording is a stub**: `VoiceService` returns null until the
+  `record` + `just_audio` packages are added (kept out to keep the build
+  light). The UI shows "voice recording coming soon" — nothing is faked.
+- **Weekly leaderboard filter is a TODO**: `leaderboardWeekly` orders by
+  all-time `totalChaptersDone`; a true weekly ranking needs a
+  `chaptersDoneThisWeek` counter field in Firestore first.
+- **FCM server send is a TODO**: the app can receive pushes and shows
+  milestone notifications in-app, but sending a push to other devices
+  needs a server / Cloud Function — the app never fakes a server send.
+- Group creation while offline is kept on-device only and is not synced
+  yet (only `message` and `note` queue ops replay in `SyncService`).
 
 ## Licence
 

@@ -1,7 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 
 import 'data/syllabus.dart';
+import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
+import 'services/auth_service.dart';
+import 'services/firebase_init.dart';
+import 'services/messaging_service.dart';
+import 'services/sync_service.dart';
 
 /// Jim portfolio palette (jimsiraj.pp.ua, "Jim, a soft sketchbook"),
 /// softened for the airy redesign: warm OFF-WHITE background #F8F6F1
@@ -44,7 +51,24 @@ CupertinoThemeData _cupertinoTheme({required bool dark}) {
   );
 }
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Firebase + FCM setup. Both are fully guarded and never throw: while
+  // lib/firebase_options.dart still holds the placeholder config the app
+  // runs in LOCAL-ONLY mode (see lib/services/firebase_init.dart).
+  try {
+    await FirebaseInit.initialize();
+  } catch (_) {
+    // Local-only mode.
+  }
+  try {
+    await MessagingService.init();
+  } catch (_) {
+    // Push notifications unavailable — the app keeps working.
+  }
+  // Starts the connectivity listener so queued offline work syncs when
+  // the device comes back online, and tries one immediate sync.
+  unawaited(SyncService.instance.syncNow());
   // The verified syllabus must never silently lose a chapter.
   assert(totalChapters == 151, 'Syllabus must have 151 chapters');
   assert(totalMilestones == 906, 'Syllabus must have 906 milestones');
@@ -67,9 +91,22 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
       title: 'HSC Science Revision Master',
       debugShowCheckedModeBanner: false,
       theme: _cupertinoTheme(dark: _dark),
-      home: HomeScreen(
-        dark: _dark,
-        onToggleTheme: () => setState(() => _dark = !_dark),
+      // Auth gate (v3): signed-out users see the auth screen, signed-in
+      // users see the tracker. In local-only mode AuthService emits null
+      // (no account exists without Firebase), so the auth screen shows
+      // until Firebase is configured; the auth screen itself explains
+      // local-only mode.
+      home: StreamBuilder<String?>(
+        stream: AuthService.instance.authStateChanges,
+        builder: (context, snapshot) {
+          if (snapshot.data != null) {
+            return HomeScreen(
+              dark: _dark,
+              onToggleTheme: () => setState(() => _dark = !_dark),
+            );
+          }
+          return const AuthScreen();
+        },
       ),
     );
   }

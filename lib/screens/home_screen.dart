@@ -2,21 +2,29 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import '../backup.dart';
 import '../data/syllabus.dart';
-import '../focus_schedule.dart';
-import '../focus_store.dart';
 import '../main.dart';
-import '../services/desktop_blocker.dart';
-import '../services/desktop_watcher.dart';
-import '../services/focus_channel.dart';
-import '../services/focus_session.dart';
+import '../milestones.dart';
+import '../models/milestone.dart';
+import '../services/admin_service.dart';
+import '../services/auth_service.dart';
+import '../services/messaging_service.dart';
+import '../services/sync_service.dart';
+import '../target_plan.dart';
 import '../tracker_store.dart';
+import '../widgets/calendar_view.dart';
+import '../widgets/download_section.dart';
+import '../widgets/milestone_celebration.dart';
 import '../widgets/pomodoro_timer.dart';
-import 'focus_screen.dart';
+import '../widgets/weekly_chart.dart';
+import 'admin_screen.dart';
+import 'chapter_note_sheet.dart';
+import 'community_screen.dart';
+import 'groups_screen.dart';
+import 'profile_screen.dart';
+import 'settings_screen.dart';
 
 // Airy spacing system (the fix for the jam-packed feel):
 // page side padding 24, section gaps 24, chapter cards 16 apart,
@@ -28,15 +36,29 @@ const double _sectionGap = 24;
 const double _cardGap = 16;
 const double _cardPadding = 20;
 
+/// One motivation quote per weekday (Monday first).
+const List<String> _dailyQuotes = [
+  'Small steps every day lead to big results.',
+  'Revision is not repeating — it is remembering better.',
+  'One chapter at a time. That is enough for today.',
+  'The best time to revise was yesterday. The next best time is now.',
+  'You do not have to be great to start, but you have to start to be great.',
+  'Progress, not perfection.',
+  'Rest is part of revision too — take your break.',
+];
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
-    required this.dark,
-    required this.onToggleTheme,
+    this.dark = false,
+    this.onToggleTheme,
   });
 
+  /// [dark] / [onToggleTheme] are optional so AuthScreen can open the
+  /// home screen with plain `const HomeScreen()` for "Continue offline".
+  /// main.dart always passes the real theme values.
   final bool dark;
-  final VoidCallback onToggleTheme;
+  final VoidCallback? onToggleTheme;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -44,29 +66,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final TrackerStore _store = TrackerStore();
-  final FocusStore _focusStore = FocusStore();
-  final FocusSchedule _schedule = FocusSchedule();
-  final FocusChannel _focusChannel = FocusChannel();
   final TextEditingController _searchController = TextEditingController();
   bool _loaded = false;
-  Timer? _scheduleTimer;
-  late final DesktopWatcher _desktopWatcher =
-      DesktopWatcher(createDesktopBlocker());
-  String? _desktopBlockedExe;
-
-  /// True only on real Android — system-wide blocking exists there only.
-  bool get _isAndroid =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
-
-  /// On non-Android, an active focus session hides the other tabs and
-  /// shows only the focus view. On Android the tabs stay (the native
-  /// service blocks other apps instead).
-  bool get _inAppFocusActive => _focusStore.isActive && !_isAndroid;
-
-  ChapterRef? get _focusChapter {
-    final pending = _store.pendingChapters(allChapterRefs);
-    return pending.isEmpty ? null : pending.first;
-  }
   String _subject = 'all';
   String _query = '';
   String _paper = 'all';
@@ -74,102 +75,66 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _toast;
   Timer? _toastTimer;
 
+  int _dailyTarget = 3;
+  DateTime? _customTargetDate;
+  final Set<String> _milestonesShown = {};
+  bool _isAdmin = false;
+
+  /// Local theme fallback: when the app opened this screen from
+  /// AuthScreen's "Continue offline" there is no [HomeScreen.onToggleTheme]
+  /// (the app-level theme lives in HscRevisionApp, which the auth gate
+  /// bypassed). The night-mode switch then toggles this local flag
+  /// instead of being dead. When a real toggle exists it wins.
+  bool _darkOverride = false;
+  bool get _effectiveDark =>
+      widget.onToggleTheme != null ? widget.dark : _darkOverride;
+  void _handleToggleTheme() {
+    if (widget.onToggleTheme != null) {
+      widget.onToggleTheme!();
+    } else {
+      setState(() => _darkOverride = !_darkOverride);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _store.load().then((_) {
       if (mounted) setState(() => _loaded = true);
     });
-    _focusStore.load().then((_) {
-      if (mounted) setState(() {});
-    });
-    _schedule.load().then((_) {
-      if (mounted) setState(() {});
-    });
-    // Schedule ticker: every 30s, auto-start focus inside a scheduled
-    // block (and resume it after a short manual session ends mid-block).
-    // It only calls setState when something actually changed, so widget
-    // tests using pumpAndSettle are not disturbed.
-    _scheduleTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      _checkSchedule();
+    _loadPrefs();
+    _loadAdmin();
+  }
+
+  Future<void> _loadPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _dailyTarget = prefs.getInt('daily-target') ?? 3;
+      final rawDate = prefs.getString('custom-target-date');
+      _customTargetDate =
+          rawDate == null ? null : DateTime.tryParse(rawDate);
+      _milestonesShown
+        ..clear()
+        ..addAll(prefs.getStringList('milestones-shown-v1') ?? []);
     });
   }
 
-  /// Auto-start a session when the weekly schedule says focus is on.
-  /// Never restarts a block the user just ended early (dismissed), and
-  /// never starts anything when no block is set.
-  Future<void> _checkSchedule() async {
-    final now = DateTime.now();
-    if (!_schedule.isBlockedAt(now) ||
-        _focusStore.isActive ||
-        _focusStore.scheduleDismissedNow) {
-      return;
+  Future<void> _loadAdmin() async {
+    final uid = AuthService.instance.currentUid;
+    if (uid == null) return;
+    try {
+      final admin = await AdminService.instance.isAdmin(uid);
+      if (mounted) setState(() => _isAdmin = admin);
+    } catch (_) {
+      // Not an admin, or offline — the admin row simply stays hidden.
     }
-    final end = _schedule.activeBlockEnd(now);
-    if (end == null) return;
-    await FocusSession.start(
-      store: _focusStore,
-      schedule: _schedule,
-      channel: _focusChannel,
-      end: end,
-      chapterId: _focusChapter?.chapter.id,
-      auto: true,
-    );
-    _syncDesktopWatcher();
-    if (mounted) setState(() {});
-  }
-
-  /// Keep the PC watcher in step with focus: watch while a session or
-  /// a scheduled block is active, stop otherwise.
-  void _syncDesktopWatcher() {
-    final blocking = _focusStore.isActive ||
-        (_schedule.isBlockedAt(DateTime.now()) &&
-            !_focusStore.scheduleDismissedNow);
-    if (!blocking) {
-      _desktopWatcher.stop();
-      if (_desktopBlockedExe != null) {
-        _desktopBlockedExe = null;
-        if (mounted) setState(() {});
-      }
-      return;
-    }
-    _desktopWatcher.start(
-      isBlocking: () =>
-          _focusStore.isActive ||
-          (_schedule.isBlockedAt(DateTime.now()) &&
-              !_focusStore.scheduleDismissedNow),
-      allowedExeNames: _focusStore.desktopWhitelist,
-      onBlocked: (exe) {
-        _desktopBlockedExe = exe;
-        if (mounted) setState(() {});
-      },
-      onReturned: () {
-        if (_desktopBlockedExe != null) {
-          _desktopBlockedExe = null;
-          if (mounted) setState(() {});
-        }
-      },
-    );
-  }
-
-  Future<void> _endDesktopFocus() async {
-    final ended = await FocusSession.end(
-      store: _focusStore,
-      schedule: _schedule,
-      channel: _focusChannel,
-    );
-    if (!ended) return; // locked session: End stays off until it ends
-    _desktopWatcher.stop();
-    _desktopBlockedExe = null;
-    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _searchController.dispose();
     _toastTimer?.cancel();
-    _scheduleTimer?.cancel();
-    _desktopWatcher.stop();
     super.dispose();
   }
 
@@ -184,12 +149,48 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _toggleStage(String chapterId, String stageId) async {
     setState(() => _store.toggle(chapterId, stageId));
     await _store.save();
+    if (_store.doneForChapter(chapterId) != revisionStages.length) return;
+    if (_milestonesShown.contains(chapterId)) return;
+    try {
+      _milestonesShown.add(chapterId);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        'milestones-shown-v1',
+        _milestonesShown.toList(),
+      );
+      final ref = allChapterRefs.firstWhere(
+        (r) => r.chapter.id == chapterId,
+      );
+      final siblings = allChapterRefs
+          .where((r) => r.subject.id == ref.subject.id)
+          .toList();
+      final index = siblings.indexWhere(
+        (r) => r.chapter.id == chapterId,
+      );
+      final name = Milestones.nameFor(
+        ref.subject.nameEn,
+        ref.chapter.title,
+        index,
+      );
+      // Milestone alerts can be switched off in Settings.
+      final alertsOn = prefs.getBool('notif-milestone') ?? true;
+      if (!mounted || !alertsOn) return;
+      MilestoneCelebration.show(context, name);
+      try {
+        MessagingService.notifyMilestone(name);
+      } catch (_) {
+        // Milestone notifications are best effort; the celebration
+        // above already told the user.
+      }
+    } catch (_) {
+      // A milestone must never break stage toggling.
+    }
   }
 
-  Future<void> _pickDate() async {
+  Future<void> _pickCustomDate() async {
     final now = DateTime.now();
     final initial =
-        _store.targetDate ?? now.add(const Duration(days: 90));
+        _customTargetDate ?? now.add(const Duration(days: 90));
     DateTime? picked;
     await showCupertinoModalPopup<void>(
       context: context,
@@ -200,65 +201,22 @@ class _HomeScreenState extends State<HomeScreen> {
         onDone: (date) => picked = date,
       ),
     );
-    if (picked == null) return;
-    setState(() => _store.targetDate = picked);
-    await _store.save();
-    _showMessage('Exam target date saved.');
-  }
-
-  Future<void> _shareSummary() async {
-    await Clipboard.setData(ClipboardData(text: _store.whatsAppSummary()));
-    if (mounted) {
-      _showMessage('WhatsApp summary copied — paste it anywhere.');
-    }
-  }
-
-  Future<void> _exportBackup() async {
-    final message = await saveBackupJson(_store.exportJson());
-    if (mounted) _showMessage(message);
-  }
-
-  Future<void> _showImportDialog() async {
-    final controller = TextEditingController();
-    final ok = await showCupertinoDialog<bool>(
-      context: context,
-      builder: (context) => CupertinoAlertDialog(
-        title: const Text('Import JSON backup'),
-        content: Padding(
-          padding: const EdgeInsets.only(top: 12),
-          child: SizedBox(
-            height: 120,
-            child: CupertinoTextField(
-              key: const Key('import-field'),
-              controller: controller,
-              maxLines: 6,
-              placeholder: 'Paste your backup JSON here',
-            ),
-          ),
-        ),
-        actions: [
-          CupertinoDialogAction(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          CupertinoDialogAction(
-            key: const Key('import-confirm'),
-            isDefaultAction: true,
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Import'),
-          ),
-        ],
-      ),
+    final pickedDate = picked;
+    if (pickedDate == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'custom-target-date',
+      pickedDate.toIso8601String(),
     );
-    if (ok != true) return;
-    final success = _store.importJson(controller.text);
-    if (success) {
-      await _store.save();
-      setState(() {});
-      _showMessage('Backup imported.');
-    } else {
-      _showMessage('That JSON is not a valid backup.');
-    }
+    setState(() => _customTargetDate = pickedDate);
+    _showMessage('Target date saved.');
+  }
+
+  Future<void> _changeDailyTarget(int delta) async {
+    final next = (_dailyTarget + delta).clamp(1, 10);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('daily-target', next);
+    setState(() => _dailyTarget = next);
   }
 
   Future<void> _resetAll() async {
@@ -292,20 +250,6 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (context) => CupertinoActionSheet(
         actions: [
           CupertinoActionSheetAction(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _exportBackup();
-            },
-            child: const Text('Export JSON backup'),
-          ),
-          CupertinoActionSheetAction(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _showImportDialog();
-            },
-            child: const Text('Import JSON backup'),
-          ),
-          CupertinoActionSheetAction(
             isDestructiveAction: true,
             onPressed: () {
               Navigator.of(context).pop();
@@ -322,6 +266,29 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openSettings() {
+    Navigator.of(context).push(
+      CupertinoPageRoute(
+        builder: (_) => SettingsScreen(
+          dark: _effectiveDark,
+          onToggleTheme: widget.onToggleTheme,
+        ),
+      ),
+    );
+  }
+
+  void _openGroups() {
+    Navigator.of(context).push(
+      CupertinoPageRoute(builder: (_) => const GroupsScreen()),
+    );
+  }
+
+  void _openAdmin() {
+    Navigator.of(context).push(
+      CupertinoPageRoute(builder: (_) => const AdminScreen()),
+    );
+  }
+
   int _subjectPct(Subject subject) {
     final refs =
         allChapterRefs.where((r) => r.subject.id == subject.id).toList();
@@ -332,6 +299,36 @@ class _HomeScreenState extends State<HomeScreen> {
       (n, r) => n + _store.doneForChapter(r.chapter.id),
     );
     return (done * 100 / total).round();
+  }
+
+  /// 0-based index of [ref] among its subject's chapters, as
+  /// [Milestones.nameFor] expects.
+  int _chapterIndexWithinSubject(ChapterRef ref) {
+    final siblings =
+        allChapterRefs.where((r) => r.subject.id == ref.subject.id).toList();
+    return siblings.indexWhere((r) => r.chapter.id == ref.chapter.id);
+  }
+
+  List<Milestone> _earnedMilestones() {
+    return allChapterRefs
+        .where((r) => _store.doneForChapter(r.chapter.id) == 6)
+        .map(
+          (r) => Milestone(
+            id: r.chapter.id,
+            // earnedAt is not displayed anywhere — only the name and
+            // subject are shown — so "now" is just a placeholder value
+            // for the required non-null field.
+            name: Milestones.nameFor(
+              r.subject.nameEn,
+              r.chapter.title,
+              _chapterIndexWithinSubject(r),
+            ),
+            subject: r.subject.nameEn,
+            chapterTitle: r.chapter.title,
+            earnedAt: DateTime.now(),
+          ),
+        )
+        .toList();
   }
 
   List<ChapterRef> get _filtered {
@@ -365,111 +362,57 @@ class _HomeScreenState extends State<HomeScreen> {
     final done = _store.doneCount;
     final pct = totalMilestones == 0 ? 0 : (done * 100 / totalMilestones).round();
     final weakest = _store.weakestSubject(allChapterRefs);
-    final target = _store.targetDate;
-    int? daysLeft;
-    String? dailyTarget;
-    if (target != null) {
-      final today = DateTime.now();
-      daysLeft = DateTime(target.year, target.month, target.day)
-          .difference(DateTime(today.year, today.month, today.day))
-          .inDays;
-      if (daysLeft < 0) daysLeft = 0;
-      final remaining = totalMilestones - done;
-      dailyTarget = daysLeft == 0
-          ? '$remaining tasks today'
-          : '~${(remaining / daysLeft).toStringAsFixed(1)} tasks/day';
-    }
+    final today = DateTime.now();
 
-    // PC blocking: a blocked foreground app takes over the whole
-    // screen with the block message until the user comes back.
-    if (_loaded && _desktopBlockedExe != null) {
-      return CupertinoPageScaffold(
-        navigationBar: const CupertinoNavigationBar(
-          middle: Text('Focus'),
-        ),
-        child: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(0, 16, 0, _pagePadding),
-            children: [
-              _JimCard(
-                child: Column(
-                  children: [
-                    const SizedBox(height: 16),
-                    Text(
-                      _focusStore.remainingLabel,
-                      key: const Key('desktop-block-remaining'),
-                      style: CupertinoTheme.of(context)
-                          .textTheme
-                          .textStyle
-                          .copyWith(
-                            fontSize: 64,
-                            fontWeight: FontWeight.w600,
-                            height: 1.2,
-                            fontFeatures: const [
-                              FontFeature.tabularFigures()
-                            ],
-                          ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Blocked app: $_desktopBlockedExe',
-                      textAlign: TextAlign.center,
-                      style: CupertinoTheme.of(context)
-                          .textTheme
-                          .textStyle
-                          .copyWith(fontSize: 18, fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Focus cholche — ei app-ta ekhon bondho. '
-                      'The app was asked to close; come back here to study.',
-                      textAlign: TextAlign.center,
-                      style: CupertinoTheme.of(context)
-                          .textTheme
-                          .textStyle
-                          .copyWith(fontSize: 15, height: 1.45),
-                    ),
-                    const SizedBox(height: 28),
-                    SizedBox(
-                      width: double.infinity,
-                      child: CupertinoButton.filled(
-                        key: const Key('desktop-block-end'),
-                        minimumSize: const Size(48, 56),
-                        borderRadius: BorderRadius.circular(14),
-                        onPressed:
-                            _focusStore.canEnd ? _endDesktopFocus : null,
-                        child: const Text('End focus'),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
+    // Per-day target: X = chapters fully completed (6/6) in total.
+    // NOTE: TrackerStore records no completion dates, so there is no
+    // honest "completed today" count — X is total finished chapters,
+    // labelled "completed so far" in the card below.
+    final completedChapters = allChapterRefs
+        .where((r) => _store.doneForChapter(r.chapter.id) == 6)
+        .length;
+    final remainingRefs = allChapterRefs
+        .where((r) => _store.doneForChapter(r.chapter.id) < 6)
+        .toList();
+    final remainingIds =
+        remainingRefs.map((r) => r.chapter.id).toList();
+    final daysLeft = _customTargetDate == null
+        ? null
+        : DailyPlan.daysLeft(
+            targetDate: _customTargetDate!,
+            today: today,
+          );
+    final perDay = _customTargetDate == null
+        ? _dailyTarget
+        : DailyPlan.chaptersPerDay(
+            remainingChapters: remainingRefs.length,
+            targetDate: _customTargetDate!,
+            today: today,
+          );
+    final planIds = DailyPlan.planForToday(
+      remainingChapterIds: remainingIds,
+      perDay: perDay,
+    );
+    final planTitles = planIds.map((id) {
+      final ref = allChapterRefs.where((r) => r.chapter.id == id);
+      return ref.isEmpty
+          ? id
+          : '${ref.first.chapter.title} · ${ref.first.subject.nameEn}';
+    }).toList();
 
-    // Non-Android focus: hide every other tab, show only the focus view.
-    if (_loaded && _inAppFocusActive) {
-      return CupertinoPageScaffold(
-        navigationBar: const CupertinoNavigationBar(
-          middle: Text('Focus'),
-        ),
-        child: SafeArea(
-          child: FocusScreen(
-            store: _focusStore,
-            schedule: _schedule,
-            focusChapter: _focusChapter,
-            onFocusChanged: () {
-              _syncDesktopWatcher();
-              setState(() {});
-            },
-          ),
-        ),
+    // Spaced revision: the 5 chapters with the lowest stage completion.
+    final reviseRefs = [...allChapterRefs]
+      ..sort(
+        (a, b) => _store
+            .doneForChapter(a.chapter.id)
+            .compareTo(_store.doneForChapter(b.chapter.id)),
       );
-    }
+    final reviseTop5 = reviseRefs
+        .where((r) => _store.doneForChapter(r.chapter.id) < 6)
+        .take(5)
+        .toList();
+
+    final quote = _dailyQuotes[(today.weekday - 1) % _dailyQuotes.length];
 
     return CupertinoPageScaffold(
       navigationBar: CupertinoNavigationBar(
@@ -478,10 +421,10 @@ class _HomeScreenState extends State<HomeScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             CupertinoButton(
-              key: const Key('share-button'),
+              key: const Key('settings-button'),
               padding: EdgeInsets.zero,
-              onPressed: _shareSummary,
-              child: const Icon(CupertinoIcons.share),
+              onPressed: _openSettings,
+              child: const Icon(CupertinoIcons.settings),
             ),
             CupertinoButton(
               key: const Key('more-menu'),
@@ -497,18 +440,61 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Column(
               children: [
+                StreamBuilder<bool>(
+                  stream: SyncService.instance.isOfflineStream,
+                  initialData: false,
+                  builder: (context, snapshot) {
+                    if (snapshot.data != true) {
+                      return const SizedBox.shrink();
+                    }
+                    final isDark =
+                        CupertinoTheme.of(context).brightness ==
+                            Brightness.dark;
+                    return Container(
+                      margin: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: JimColors.rose.withValues(
+                          alpha: isDark ? 0.18 : 0.08,
+                        ),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: const [
+                          Icon(
+                            CupertinoIcons.wifi_slash,
+                            size: 16,
+                            color: JimColors.rose,
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'Offline — will sync',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
                 Expanded(
                   child: _loaded
                       ? CupertinoTabScaffold(
                           tabBar: CupertinoTabBar(
                             key: const Key('bottom-nav'),
-                            activeColor: widget.dark
+                            activeColor: _effectiveDark
                                 ? JimColors.darkText
                                 : JimColors.softBlack,
-                            inactiveColor: widget.dark
+                            inactiveColor: _effectiveDark
                                 ? JimColors.darkMuted
                                 : JimColors.muted,
-                            backgroundColor: widget.dark
+                            backgroundColor: _effectiveDark
                                 ? JimColors.darkBg
                                 : JimColors.paper,
                             items: const [
@@ -521,12 +507,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 label: 'All chapters',
                               ),
                               BottomNavigationBarItem(
-                                icon: Icon(CupertinoIcons.timer),
-                                label: 'Focus',
+                                icon: Icon(CupertinoIcons.group),
+                                label: 'Community',
                               ),
                               BottomNavigationBarItem(
-                                icon: Icon(CupertinoIcons.calendar),
-                                label: 'Exam plan',
+                                icon: Icon(CupertinoIcons.person),
+                                label: 'Profile',
                               ),
                             ],
                           ),
@@ -540,13 +526,24 @@ class _HomeScreenState extends State<HomeScreen> {
                                     pct: pct,
                                     weakestName: weakest.nameEn,
                                     weakestPct: _subjectPct(weakest),
+                                    dark: _effectiveDark,
+                                    onToggleTheme: _handleToggleTheme,
+                                    dailyTarget: _dailyTarget,
+                                    onDailyTargetChanged: _changeDailyTarget,
+                                    completedChapters: completedChapters,
+                                    customTargetDate: _customTargetDate,
                                     daysLeft: daysLeft,
-                                    dailyTarget: dailyTarget,
-                                    targetDate: target,
-                                    dark: widget.dark,
-                                    onToggleTheme: widget.onToggleTheme,
-                                    onPickDate: _pickDate,
+                                    perDay: perDay,
+                                    planTitles: planTitles,
+                                    reviseRefs: reviseTop5,
+                                    milestones: _earnedMilestones(),
+                                    quote: quote,
+                                    isAdmin: _isAdmin,
+                                    onPickCustomDate: _pickCustomDate,
                                     onToggleStage: _toggleStage,
+                                    onOpenSettings: _openSettings,
+                                    onOpenGroups: _openGroups,
+                                    onOpenAdmin: _openAdmin,
                                   ),
                                 );
                               case 1:
@@ -571,20 +568,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                 );
                               case 2:
                                 return CupertinoTabView(
-                                  builder: (context) => FocusScreen(
-                                    store: _focusStore,
-                                    schedule: _schedule,
-                                    focusChapter: _focusChapter,
-                                    onFocusChanged: () {
-                                      _syncDesktopWatcher();
-                                      setState(() {});
-                                    },
-                                  ),
+                                  builder: (context) =>
+                                      const CommunityScreen(),
                                 );
                               default:
                                 return CupertinoTabView(
                                   builder: (context) =>
-                                      const _ExamPlanTab(),
+                                      const ProfileScreen(),
                                 );
                             }
                           },
@@ -607,7 +597,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       vertical: 14,
                     ),
                     decoration: BoxDecoration(
-                      color: widget.dark
+                      color: _effectiveDark
                           ? JimColors.darkText
                           : JimColors.softBlack,
                       borderRadius: BorderRadius.circular(16),
@@ -616,7 +606,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       _toast!,
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: widget.dark
+                        color: _effectiveDark
                             ? JimColors.softBlack
                             : CupertinoColors.white,
                         fontWeight: FontWeight.w600,
@@ -819,21 +809,14 @@ class _ProgressHeader extends StatelessWidget {
     required this.pct,
     required this.weakestName,
     required this.weakestPct,
-    required this.daysLeft,
-    required this.dailyTarget,
-    required this.targetDate,
     required this.dark,
     required this.onToggleTheme,
-    required this.onPickDate,
   });
 
   final int done, pct, weakestPct;
   final String weakestName;
-  final int? daysLeft;
-  final String? dailyTarget;
-  final DateTime? targetDate;
   final bool dark;
-  final VoidCallback onToggleTheme, onPickDate;
+  final VoidCallback onToggleTheme;
 
   @override
   Widget build(BuildContext context) {
@@ -897,23 +880,6 @@ class _ProgressHeader extends StatelessWidget {
                   label: 'Needs most work',
                   value: '$weakestName · $weakestPct%',
                 ),
-                Container(height: 1, color: line),
-                GestureDetector(
-                  key: const Key('target-date'),
-                  onTap: onPickDate,
-                  behavior: HitTestBehavior.opaque,
-                  child: _StatRow(
-                    label: 'Exam target',
-                    value: targetDate == null
-                        ? 'Set a date'
-                        : '${daysLeft ?? 0} days left',
-                  ),
-                ),
-                Container(height: 1, color: line),
-                _StatRow(
-                  label: 'Daily pace',
-                  value: dailyTarget ?? 'Set a date to see it',
-                ),
               ],
             ),
           ),
@@ -953,33 +919,54 @@ class _TodayTab extends StatelessWidget {
     required this.pct,
     required this.weakestName,
     required this.weakestPct,
-    required this.daysLeft,
-    required this.dailyTarget,
-    required this.targetDate,
     required this.dark,
     required this.onToggleTheme,
-    required this.onPickDate,
+    required this.dailyTarget,
+    required this.onDailyTargetChanged,
+    required this.completedChapters,
+    required this.customTargetDate,
+    required this.daysLeft,
+    required this.perDay,
+    required this.planTitles,
+    required this.reviseRefs,
+    required this.milestones,
+    required this.quote,
+    required this.isAdmin,
+    required this.onPickCustomDate,
     required this.onToggleStage,
+    required this.onOpenSettings,
+    required this.onOpenGroups,
+    required this.onOpenAdmin,
   });
 
   final TrackerStore store;
   final int done, pct, weakestPct;
   final String weakestName;
-  final int? daysLeft;
-  final String? dailyTarget;
-  final DateTime? targetDate;
   final bool dark;
-  final VoidCallback onToggleTheme, onPickDate;
+  final VoidCallback onToggleTheme;
+  final int dailyTarget;
+  final ValueChanged<int> onDailyTargetChanged;
+  final int completedChapters;
+  final DateTime? customTargetDate;
+  final int? daysLeft;
+  final int perDay;
+  final List<String> planTitles;
+  final List<ChapterRef> reviseRefs;
+  final List<Milestone> milestones;
+  final String quote;
+  final bool isAdmin;
+  final VoidCallback onPickCustomDate;
   final Future<void> Function(String, String) onToggleStage;
+  final VoidCallback onOpenSettings, onOpenGroups, onOpenAdmin;
 
   @override
   Widget build(BuildContext context) {
     final pending = store.pendingChapters(allChapterRefs).take(5).toList();
     final base = CupertinoTheme.of(context).textTheme.textStyle;
-    final muted =
-        CupertinoTheme.of(context).brightness == Brightness.dark
-            ? JimColors.darkMuted
-            : JimColors.muted;
+    final isDark =
+        CupertinoTheme.of(context).brightness == Brightness.dark;
+    final muted = isDark ? JimColors.darkMuted : JimColors.muted;
+    final line = isDark ? JimColors.darkLine : JimColors.line;
     return ListView(
       padding: const EdgeInsets.fromLTRB(0, 8, 0, _pagePadding),
       children: [
@@ -988,12 +975,114 @@ class _TodayTab extends StatelessWidget {
           pct: pct,
           weakestName: weakestName,
           weakestPct: weakestPct,
-          daysLeft: daysLeft,
-          dailyTarget: dailyTarget,
-          targetDate: targetDate,
           dark: dark,
           onToggleTheme: onToggleTheme,
-          onPickDate: onPickDate,
+        ),
+        _JimCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Today’s target',
+                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      // X is total finished chapters, not today's count:
+                      // the tracker records no completion dates.
+                      'Today: $completedChapters/$dailyTarget chapters',
+                      style: base.copyWith(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  CupertinoButton(
+                    key: const Key('daily-target-minus'),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    onPressed: () => onDailyTargetChanged(-1),
+                    child: const Icon(CupertinoIcons.minus_circle),
+                  ),
+                  CupertinoButton(
+                    key: const Key('daily-target-plus'),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    onPressed: () => onDailyTargetChanged(1),
+                    child: const Icon(CupertinoIcons.plus_circle),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'completed so far — set how many chapters to finish each day with + / −.',
+                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
+              ),
+            ],
+          ),
+        ),
+        _JimCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Today’s plan',
+                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                customTargetDate == null
+                    ? 'Set a target date and the remaining chapters spread evenly over the days left.'
+                    : '${daysLeft ?? 0} days left · $perDay chapter${perDay == 1 ? '' : 's'} a day',
+                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
+              ),
+              const SizedBox(height: 16),
+              if (planTitles.isEmpty)
+                Text(
+                  'All 151 chapters are finished — re-test finished chapters after a 2–3 day gap.',
+                  style: base.copyWith(fontSize: 15, height: 1.45),
+                )
+              else
+                ...planTitles.map(
+                  (title) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          margin: const EdgeInsets.only(top: 7),
+                          decoration: const BoxDecoration(
+                            color: JimColors.rose,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: base.copyWith(fontSize: 15, height: 1.45),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 12),
+              CupertinoButton(
+                key: const Key('pick-target-date'),
+                padding: EdgeInsets.zero,
+                onPressed: onPickCustomDate,
+                child: Text(
+                  customTargetDate == null
+                      ? 'Set target date'
+                      : 'Change target date',
+                ),
+              ),
+            ],
+          ),
         ),
         _JimCard(
           child: Column(
@@ -1049,13 +1138,116 @@ class _TodayTab extends StatelessWidget {
             ],
           ),
         ),
+        _JimCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Revise again',
+                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Your weakest chapters — spaced revision, lowest stage completion first.',
+                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
+              ),
+              const SizedBox(height: 16),
+              if (reviseRefs.isEmpty)
+                Text(
+                  'Nothing to revise — every chapter is finished.',
+                  style: base.copyWith(fontSize: 15, height: 1.45),
+                )
+              else
+                ...reviseRefs.map(
+                  (ref) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${ref.chapter.title} · ${ref.subject.nameEn}',
+                            style: base.copyWith(fontSize: 15, height: 1.45),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Text(
+                          '${store.doneForChapter(ref.chapter.id)}/6',
+                          style: base.copyWith(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        _JimCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Your week',
+                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 16),
+              // TrackerStore records no completion dates, so the calendar
+              // has no marked days and the chart starts at zero — both
+              // fill in from today as chapters are finished.
+              const CalendarView(completedDays: {}),
+              const SizedBox(height: 20),
+              const WeeklyChart(chaptersPerDay: [0, 0, 0, 0, 0, 0, 0]),
+              const SizedBox(height: 8),
+              Text(
+                'Track from today — finished chapters will mark the calendar and grow the bars.',
+                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
+              ),
+            ],
+          ),
+        ),
+        _JimCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Milestones',
+                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              MilestoneList(milestones: milestones),
+            ],
+          ),
+        ),
+        _JimCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'For today',
+                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                quote,
+                style: base.copyWith(
+                  fontSize: 15,
+                  height: 1.45,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: _sectionGap),
         _JimCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Focus timer',
+                'Pomodoro timer',
                 style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 16),
@@ -1063,7 +1255,78 @@ class _TodayTab extends StatelessWidget {
             ],
           ),
         ),
+        const SizedBox(height: _sectionGap),
+        _JimCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'More',
+                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              _MoreRow(
+                icon: CupertinoIcons.settings,
+                label: 'Settings',
+                onTap: onOpenSettings,
+              ),
+              Container(height: 1, color: line),
+              _MoreRow(
+                icon: CupertinoIcons.group,
+                label: 'Groups',
+                onTap: onOpenGroups,
+              ),
+              if (isAdmin) ...[
+                Container(height: 1, color: line),
+                _MoreRow(
+                  icon: CupertinoIcons.shield,
+                  label: 'Admin panel',
+                  onTap: onOpenAdmin,
+                ),
+              ],
+            ],
+          ),
+        ),
+        // Web only (DownloadSection renders nothing on app builds).
+        const DownloadSection(),
       ],
+    );
+  }
+}
+
+class _MoreRow extends StatelessWidget {
+  const _MoreRow({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        child: Row(
+          children: [
+            Icon(icon, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                label,
+                style: base.copyWith(fontSize: 15, height: 1.45),
+              ),
+            ),
+            const Icon(CupertinoIcons.chevron_right, size: 18),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1331,6 +1594,8 @@ class _ChapterCardState extends State<_ChapterCard> {
                 ),
               ),
               const SizedBox(width: 16),
+              ChapterNoteBadge(chapterId: ref.chapter.id),
+              const SizedBox(width: 8),
               Text(
                 '$done/6',
                 style: base.copyWith(
@@ -1422,6 +1687,32 @@ class _ChapterCardState extends State<_ChapterCard> {
                     ),
                   ),
           ),
+          const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: CupertinoButton(
+              key: ValueKey('note-${ref.chapter.id}'),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 6,
+              ),
+              color: isDark ? JimColors.darkBg : JimColors.paper,
+              borderRadius: BorderRadius.circular(999),
+              onPressed: () => ChapterNoteSheet.show(
+                context,
+                chapterId: ref.chapter.id,
+                chapterTitle: ref.chapter.title,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  Icon(CupertinoIcons.pencil, size: 16),
+                  SizedBox(width: 6),
+                  Text('Note', style: TextStyle(fontSize: 14)),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -1473,71 +1764,6 @@ class _StageChip extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _ExamPlanTab extends StatelessWidget {
-  const _ExamPlanTab();
-
-  @override
-  Widget build(BuildContext context) {
-    final base = CupertinoTheme.of(context).textTheme.textStyle;
-    final muted =
-        CupertinoTheme.of(context).brightness == Brightness.dark
-            ? JimColors.darkMuted
-            : JimColors.muted;
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(0, 16, 0, _pagePadding),
-      children: [
-        _JimCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Exam plan — HSC 2026 reference',
-                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Written exams ran 2 Jul – 8 Aug 2026 (full syllabus, full marks). '
-                'Practicals from 15 Aug 2026. Non-practical paper: MCQ 30 + CQ 70. '
-                'Practical subjects: theory 75 (MCQ 25 + CQ 50) + practical 25.',
-                style: base.copyWith(fontSize: 15, height: 1.45),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'HSC 2027 routine was not published at research time (Nov 2026) — '
-                'no 2027 date is shown here. Set your own target date on the '
-                'progress card and check dhakaeducationboard.gov.bd.',
-                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: _sectionGap),
-        ...syllabusData.map((subject) {
-          final meta = subjectMeta[subject.id];
-          return _JimCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  subject.nameEn,
-                  style: base.copyWith(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  meta == null
-                      ? '${subject.chapterCount} chapters'
-                      : 'Code ${meta.code} · 2026 exam ${meta.exam2026}\n${meta.marks} · ${subject.chapterCount} chapters',
-                  style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
-                ),
-              ],
-            ),
-          );
-        }),
-      ],
     );
   }
 }

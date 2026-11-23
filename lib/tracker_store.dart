@@ -84,50 +84,6 @@ class TrackerStore {
       .where((r) => doneForChapter(r.chapter.id) < revisionStages.length)
       .toList();
 
-  String exportJson() => jsonEncode({
-        'app': 'hsc-revision-master',
-        'version': 2,
-        'checks': checks,
-        'targetDate': targetDate?.toIso8601String(),
-      });
-
-  /// Returns true when the pasted JSON was a valid backup of this app.
-  bool importJson(String raw) {
-    try {
-      final decoded = jsonDecode(raw) as Map<String, dynamic>;
-      final incoming = decoded['checks'];
-      if (incoming is! Map) return false;
-      checks
-        ..clear()
-        ..addAll(
-          incoming.map((k, v) => MapEntry(k.toString(), v == true)),
-        );
-      final target = decoded['targetDate'];
-      if (target is String) targetDate = DateTime.tryParse(target);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  String whatsAppSummary() {
-    final buffer = StringBuffer()
-      ..writeln('📚 HSC Science Revision Master')
-      ..writeln('Progress: $doneCount / $totalMilestones '
-          '(${(doneCount * 100 / totalMilestones).round()}%)');
-    for (final subject in syllabusData) {
-      final refs = allChapterRefs
-          .where((r) => r.subject.id == subject.id)
-          .toList();
-      final total = refs.length * revisionStages.length;
-      final done = refs.fold<int>(
-        0,
-        (n, r) => n + doneForChapter(r.chapter.id),
-      );
-      buffer.writeln(
-        '• ${subject.nameEn}: $done/$total (${(done * 100 / total).round()}%)',
-      );
-    }
-    return buffer.toString();
-  }
+  // NOTE (v3): JSON backup/restore and clipboard share were removed at
+  // Rafi's request — cloud sync (Firestore) replaces them.
 }

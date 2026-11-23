@@ -1,7 +1,7 @@
 name: hsc_revision_master
 description: "HSC Science Revision Master — soft, phone-first tracker. 7 subjects, 151 chapters, 906 milestones."
 publish_to: "none"
-version: 2.1.0+2
+version: 3.0.0+3
 
 environment:
   sdk: ^3.5.0
@@ -13,8 +13,16 @@ dependencies:
   cupertino_icons: ^1.0.8
   shared_preferences: ^2.3.0
   path_provider: ^2.1.0
-  win32: ^6.4.0
-  ffi: ^2.2.0
+  # --- v3 online features (Firebase backend) ---
+  firebase_core: ^4.0.0
+  firebase_auth: ^6.0.0
+  cloud_firestore: ^6.0.0
+  firebase_storage: ^13.0.0
+  firebase_messaging: ^16.0.0
+  google_sign_in: ^6.2.1
+  image_picker: ^1.2.0
+  connectivity_plus: ^7.0.0
+  crypto: ^3.0.0
 
 dev_dependencies:
   flutter_test:

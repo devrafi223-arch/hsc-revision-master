@@ -7,6 +7,15 @@ import 'package:hsc_revision_master/main.dart';
 import 'package:hsc_revision_master/widgets/pomodoro_timer.dart';
 
 void main() {
+  // Boots the app and enters the tracker through the auth gate's
+  // "Continue offline" path (local-only mode: no Firebase account).
+  Future<void> enterApp(WidgetTester tester) async {
+    await tester.pumpWidget(const HscRevisionApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue offline'));
+    await tester.pumpAndSettle();
+  }
+
   test('syllabus has the verified 151 chapters / 906 milestones', () {
     expect(totalChapters, 151);
     expect(totalMilestones, 906);
@@ -18,8 +27,7 @@ void main() {
 
   testWidgets('stage chip tap toggles a chapter from 0/6 to 1/6', (tester) async {
     SharedPreferences.setMockInitialValues({});
-    await tester.pumpWidget(const HscRevisionApp());
-    await tester.pumpAndSettle();
+    await enterApp(tester);
 
     await tester.tap(find.text('All chapters'));
     await tester.pumpAndSettle();
@@ -32,8 +40,7 @@ void main() {
 
   testWidgets('subject chip filters the chapter list', (tester) async {
     SharedPreferences.setMockInitialValues({});
-    await tester.pumpWidget(const HscRevisionApp());
-    await tester.pumpAndSettle();
+    await enterApp(tester);
 
     await tester.tap(find.text('All chapters'));
     await tester.pumpAndSettle();
@@ -44,12 +51,13 @@ void main() {
 
   testWidgets('search filters by English chapter title', (tester) async {
     SharedPreferences.setMockInitialValues({});
-    await tester.pumpWidget(const HscRevisionApp());
-    await tester.pumpAndSettle();
+    await enterApp(tester);
 
     await tester.tap(find.text('All chapters'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(CupertinoTextField), 'Vectors');
+    // The Community tab builds text fields too, so target the All-tab
+    // search field by its key rather than by type.
+    await tester.enterText(find.byKey(const Key('search-field')), 'Vectors');
     await tester.pumpAndSettle();
     // 'Vectors' matches two chapters: Physics Ch.2 and Higher Math Ch.2.
     expect(find.text('Showing 2 of 151 chapters'), findsOneWidget);
@@ -57,8 +65,7 @@ void main() {
 
   testWidgets('paper segmented control filters to 1st-paper chapters', (tester) async {
     SharedPreferences.setMockInitialValues({});
-    await tester.pumpWidget(const HscRevisionApp());
-    await tester.pumpAndSettle();
+    await enterApp(tester);
 
     await tester.tap(find.text('All chapters'));
     await tester.pumpAndSettle();
@@ -71,8 +78,7 @@ void main() {
 
   testWidgets('theme switch toggles night mode on', (tester) async {
     SharedPreferences.setMockInitialValues({});
-    await tester.pumpWidget(const HscRevisionApp());
-    await tester.pumpAndSettle();
+    await enterApp(tester);
 
     final switchFinder = find.byKey(const Key('theme-toggle'));
     expect(tester.widget<CupertinoSwitch>(switchFinder).value, isFalse);
@@ -81,16 +87,24 @@ void main() {
     expect(tester.widget<CupertinoSwitch>(switchFinder).value, isTrue);
   });
 
-  testWidgets('Cupertino tab bar switches between Today, All and Exam plan', (tester) async {
+  testWidgets('Cupertino tab bar switches between Today, All, Community and Profile', (tester) async {
     SharedPreferences.setMockInitialValues({});
-    await tester.pumpWidget(const HscRevisionApp());
-    await tester.pumpAndSettle();
+    await enterApp(tester);
 
     expect(find.byType(CupertinoTabBar), findsOneWidget);
+    // The Today tab is a long list now (target + plan cards sit above
+    // Today's Focus), so scroll it into view before asserting.
+    await tester.scrollUntilVisible(
+      find.textContaining("Today's Focus"),
+      200,
+    );
     expect(find.textContaining("Today's Focus"), findsOneWidget);
-    await tester.tap(find.text('Exam plan'));
+    await tester.tap(find.text('Community'));
     await tester.pumpAndSettle();
-    expect(find.text('Exam plan — HSC 2026 reference'), findsOneWidget);
+    expect(find.text('Community'), findsWidgets);
+    await tester.tap(find.text('Profile'));
+    await tester.pumpAndSettle();
+    expect(find.text('You are not signed in.'), findsOneWidget);
     await tester.tap(find.text('All chapters'));
     await tester.pumpAndSettle();
     expect(find.text('Showing 151 of 151 chapters'), findsOneWidget);
