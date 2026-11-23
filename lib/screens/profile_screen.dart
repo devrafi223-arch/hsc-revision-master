@@ -38,7 +38,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _privacy = 'public';
   String _photoVisibility = 'all';
 
-  String? get _uid => AuthService.instance.currentUid;
+  String? get _uid => AuthService.instance.effectiveUid;
   bool get _isOwn => widget.userId == null || widget.userId == _uid;
   String? get _targetUid => widget.userId ?? _uid;
 

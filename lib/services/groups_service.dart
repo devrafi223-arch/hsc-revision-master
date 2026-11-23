@@ -63,7 +63,7 @@ class GroupsService {
 
   /// Creates a group and returns its 6-char uppercase join code.
   Future<String> createGroup(String name) async {
-    final uid = AuthService.instance.currentUid;
+    final uid = AuthService.instance.effectiveUid;
     final code = _newCode();
     final now = DateTime.now().millisecondsSinceEpoch;
     final group = <String, dynamic>{
@@ -109,7 +109,7 @@ class GroupsService {
   /// Joins the group with this [code]. Returns true on success, false
   /// when no group has that code (or when offline and unknown locally).
   Future<bool> joinGroup(String code) async {
-    final uid = AuthService.instance.currentUid;
+    final uid = AuthService.instance.effectiveUid;
     if (uid == null) return false;
     final normalized = code.trim().toUpperCase();
     if (!SupabaseInit.isOnlineMode) {
@@ -185,7 +185,7 @@ class GroupsService {
   /// Groups the current user is a member of. Offline → the locally kept
   /// list (groups created/joined on this device).
   Stream<List<Map<String, dynamic>>> myGroups() {
-    final uid = AuthService.instance.currentUid;
+    final uid = AuthService.instance.effectiveUid;
     if (!SupabaseInit.isOnlineMode || uid == null) {
       return Stream.fromFuture(_readLocalGroups());
     }

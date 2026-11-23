@@ -110,7 +110,7 @@ class CommunityService {
   // -- helpers ----------------------------------------------------------
 
   Future<(String, String)> _author() async {
-    final uid = AuthService.instance.currentUid ?? 'anonymous';
+    final uid = AuthService.instance.effectiveUid ?? 'anonymous';
     var name = 'Student';
     try {
       final user = await UserRepository.instance.getUser(uid);
@@ -142,7 +142,7 @@ class CommunityService {
   /// the local bookmark set into `bookmarkedBy`.
   Future<List<CommunityMessage>> _fetchMessages({String? groupId}) async {
     await _loadBookmarks();
-    final uid = AuthService.instance.currentUid;
+    final uid = AuthService.instance.effectiveUid;
     final query = _db.from('messages').select();
     // Filters go BEFORE order/limit: select() returns a FilterBuilder
     // (eq/isFilter live there); order()/limit() return a TransformBuilder.
@@ -454,7 +454,7 @@ class CommunityService {
   /// One vote per user: the `polls` row's `votes` map is updated with
   /// votes[currentUid] = optionIndex, overwriting any previous vote.
   Future<void> vote(String messageId, int optionIndex) async {
-    final uid = AuthService.instance.currentUid;
+    final uid = AuthService.instance.effectiveUid;
     if (uid == null || !SupabaseInit.isOnlineMode) return;
     try {
       final pollRow = await _db
@@ -552,8 +552,8 @@ class CommunityService {
   /// local-only — see the class doc). The feed stream re-emits so the
   /// screens' bookmark filter updates.
   Future<void> toggleBookmark(String messageId) async {
-    final uid = AuthService.instance.currentUid;
-    if (uid == null) return;
+    // No uid needed: bookmarks are local-only (per device), so they
+    // work with no login at all.
     await _loadBookmarks();
     if (_bookmarkedIds.contains(messageId)) {
       _bookmarkedIds.remove(messageId);
@@ -565,7 +565,7 @@ class CommunityService {
   }
 
   Future<void> report(String messageId, String reason) async {
-    final uid = AuthService.instance.currentUid;
+    final uid = AuthService.instance.effectiveUid;
     if (!SupabaseInit.isOnlineMode) {
       await _enqueue({
         'type': 'report',
@@ -587,7 +587,7 @@ class CommunityService {
   }
 
   Future<void> blockUser(String uid) async {
-    final myUid = AuthService.instance.currentUid;
+    final myUid = AuthService.instance.effectiveUid;
     if (myUid == null) return;
     if (!SupabaseInit.isOnlineMode) {
       await _enqueue({

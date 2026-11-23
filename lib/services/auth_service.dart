@@ -1,4 +1,7 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/app_user.dart';
@@ -66,6 +69,46 @@ class AuthService {
       : null;
 
   bool get signedIn => currentUid != null;
+
+  /// No-login identity (Rafi, 2026-11-23: the login screen is removed).
+  /// The app still needs a stable per-device id for community posts,
+  /// votes, notes and groups — a UUID generated once and kept in
+  /// SharedPreferences. A signed-in account always wins over it.
+  static const _localUidKey = 'local-anon-uid-v1';
+  String? _localUid;
+  String? get localUid => _localUid;
+
+  /// The id features use when nobody is signed in.
+  String? get effectiveUid => currentUid ?? _localUid;
+
+  /// Loads (or first creates) the local anonymous id. Call once at
+  /// startup; never throws.
+  Future<void> ensureLocalUid() async {
+    if (_localUid != null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var uid = prefs.getString(_localUidKey);
+      if (uid == null || uid.isEmpty) {
+        uid = _newUuidV4();
+        await prefs.setString(_localUidKey, uid);
+      }
+      _localUid = uid;
+    } catch (_) {
+      // Identity is best effort; the app works without it (features
+      // that need an id simply stay off).
+      _localUid ??= _newUuidV4();
+    }
+  }
+
+  static String _newUuidV4() {
+    final r = Random.secure();
+    final bytes = List<int>.generate(16, (_) => r.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final h = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-'
+        '${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
+  }
 
   /// Emits true when a password-recovery link was opened: Supabase
   /// emits [AuthChangeEvent.passwordRecovery] and the app must show

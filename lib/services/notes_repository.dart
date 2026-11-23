@@ -53,7 +53,7 @@ class NotesRepository {
     required String text,
     String? localPhotoPath,
   }) async {
-    final uid = AuthService.instance.currentUid;
+    final uid = AuthService.instance.effectiveUid;
     final cache = await _readCache();
     final existing =
         (cache[chapterId] as Map?)?.cast<String, dynamic>() ?? {};
@@ -134,7 +134,7 @@ class NotesRepository {
     final local = (cache[chapterId] as Map?)?.cast<String, dynamic>();
     if (local != null) return local;
 
-    final uid = AuthService.instance.currentUid;
+    final uid = AuthService.instance.effectiveUid;
     if (!SupabaseInit.isOnlineMode || uid == null) return null;
     try {
       final row = await _db
@@ -156,7 +156,7 @@ class NotesRepository {
   /// Emits whenever the note for [chapterId] changes. Offline → a single
   /// null event (the local cache is the source of truth there).
   Stream<void> watchNote(String chapterId) {
-    final uid = AuthService.instance.currentUid;
+    final uid = AuthService.instance.effectiveUid;
     if (!SupabaseInit.isOnlineMode || uid == null) {
       return Stream<void>.value(null);
     }

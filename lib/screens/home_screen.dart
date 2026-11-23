@@ -55,9 +55,9 @@ class HomeScreen extends StatefulWidget {
     this.onToggleTheme,
   });
 
-  /// [dark] / [onToggleTheme] are optional so AuthScreen can open the
-  /// home screen with plain `const HomeScreen()` for "Continue offline".
-  /// main.dart always passes the real theme values.
+  /// [dark] / [onToggleTheme] are optional so tests can open the home
+  /// screen with plain `const HomeScreen()`. main.dart always passes
+  /// the real theme values.
   final bool dark;
   final VoidCallback? onToggleTheme;
 

@@ -5,9 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'data/syllabus.dart';
-import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
-import 'screens/reset_password_screen.dart';
 import 'services/app_log.dart';
 import 'services/auth_service.dart';
 import 'services/supabase_init.dart';
@@ -153,8 +151,8 @@ Future<void> main() async {
     // is awaited before runApp and a stalled TLS/network call has no
     // timeout of its own — on a bad connection the app used to stay a
     // black window forever (Windows, 2026-11-23). 12s is plenty on a
-    // normal connection; on timeout the app starts offline and the auth
-    // screen offers Try again.
+    // normal connection; on timeout the app starts offline and the
+    // "Offline — will sync" pill shows on the Today tab.
     final online = await SupabaseInit.initialize().timeout(
       const Duration(seconds: 12),
       onTimeout: () {
@@ -169,6 +167,12 @@ Future<void> main() async {
   } catch (e) {
     AppLog.warn('startup', 'Supabase init failed: $e');
   }
+  // Local anonymous id for community/notes/groups now that there is no
+  // login screen (Rafi, 2026-11-23). Never throws; the app works
+  // without it.
+  try {
+    await AuthService.instance.ensureLocalUid();
+  } catch (_) {}
   try {
     await MessagingService.init();
   } catch (_) {
@@ -198,8 +202,6 @@ class HscRevisionApp extends StatefulWidget {
 class _HscRevisionAppState extends State<HscRevisionApp> {
   bool _dark = false;
 
-  StreamSubscription<bool>? _recoverySub;
-
   @override
   void initState() {
     super.initState();
@@ -207,25 +209,6 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
       if (!mounted) return;
       setState(() => _dark = prefs.getBool('night-mode') ?? false);
     });
-    // Recovery state lives in AuthService.recoveryPending (set by the
-    // passwordRecovery auth event for the mail-link flow, and by
-    // verifyRecoveryCode for the code flow). Rebuild when it changes.
-    AuthService.recoveryPending.addListener(_onRecoveryChanged);
-    _recoverySub =
-        AuthService.instance.passwordRecoveryChanges.listen((recovering) {
-      if (recovering) AuthService.recoveryPending.value = true;
-    });
-  }
-
-  void _onRecoveryChanged() {
-    if (mounted) setState(() {});
-  }
-
-  @override
-  void dispose() {
-    AuthService.recoveryPending.removeListener(_onRecoveryChanged);
-    _recoverySub?.cancel();
-    super.dispose();
   }
 
   Future<void> _toggleTheme() async {
@@ -242,30 +225,14 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
       debugShowCheckedModeBanner: false,
       navigatorKey: AppLog.navigatorKey,
       theme: jimTheme(dark: _dark),
-      // Auth gate (v3): signed-out users see the auth screen, signed-in
-      // users see the tracker. In local-only mode AuthService emits null
-      // (no account exists without Supabase), so the auth screen shows
-      // until Supabase is configured; the auth screen itself explains
-      // local-only mode.
-      home: StreamBuilder<String?>(
-        stream: AuthService.instance.authStateChanges,
-        builder: (context, snapshot) {
-          // No offline bypass (Rafi): login is mandatory. Offline is
-          // only shown AFTER login, when the device loses internet
-          // (the "Offline — will sync" pill on the Today tab).
-          if (AuthService.recoveryPending.value) {
-            return ResetPasswordScreen(
-              onDone: () => AuthService.recoveryPending.value = false,
-            );
-          }
-          if (snapshot.data != null) {
-            return HomeScreen(
-              dark: _dark,
-              onToggleTheme: _toggleTheme,
-            );
-          }
-          return const AuthScreen();
-        },
+      // No login screen (Rafi, 2026-11-23): the app opens straight
+      // into the tracker. Online features (community, notes sync,
+      // groups) run under a local anonymous id from
+      // AuthService.ensureLocalUid; the admin panel still needs a
+      // real admin account, so its row stays hidden without one.
+      home: HomeScreen(
+        dark: _dark,
+        onToggleTheme: _toggleTheme,
       ),
     );
   }

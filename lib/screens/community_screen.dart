@@ -87,7 +87,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
     });
   }
 
-  String? get _uid => AuthService.instance.currentUid;
+  String? get _uid => AuthService.instance.effectiveUid;
 
   @override
   void dispose() {

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -38,12 +39,38 @@ class SecureLocalStorage extends LocalStorage {
   Future<String?> accessToken() async {
     try {
       final raw = await _storage.read(key: _key);
-      if (raw == null) return null;
-      final json = jsonDecode(raw) as Map<String, dynamic>;
-      return json['access_token'] as String?;
+      final clean = storedSessionString(raw);
+      if (raw != null && clean == null) {
+        // A stored value that is not a JSON session is corrupt: drop
+        // it so startup continues logged-out instead of crashing in
+        // GoTrue's session recovery.
+        await _storage.delete(key: _key);
+      }
+      return clean;
     } catch (_) {
       return null;
     }
+  }
+
+  /// The string supabase_flutter passes to GoTrue.setInitialSession /
+  /// recoverSession must be the WHOLE stored JSON session — those
+  /// methods json-decode it into a Session. Returning only the
+  /// access_token field (a bare `eyJ...` JWT) made startup throw
+  /// FormatException: Unexpected character (at character 1) on every
+  /// launch with a persisted session (Windows crash, 2026-11-23).
+  /// Anything that is not a JSON object is corrupt and yields null.
+  @visibleForTesting
+  static String? storedSessionString(String? raw) {
+    if (raw == null) return null;
+    final trimmed = raw.trimLeft();
+    if (!trimmed.startsWith('{')) return null;
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is! Map<String, dynamic>) return null;
+    } catch (_) {
+      return null;
+    }
+    return raw;
   }
 
   @override
