@@ -57,6 +57,15 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# firebase_auth 6.7.1 triggers MSVC warning C4238 ("class rvalue used as
+# lvalue") in its Windows C++ plugin, and APPLY_STANDARD_SETTINGS builds
+# plugins with /WX (warnings as errors), so the Windows build fails with
+# error C2220. Disable warnings-as-errors for this plugin only — its code
+# is upstream, not ours. Keep /WX for everything else.
+if(TARGET firebase_auth_plugin)
+  target_compile_options(firebase_auth_plugin PRIVATE /WX- /wd"4238")
+endif()
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can
