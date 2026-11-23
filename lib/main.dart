@@ -86,12 +86,6 @@ class HscRevisionApp extends StatefulWidget {
 class _HscRevisionAppState extends State<HscRevisionApp> {
   bool _dark = false;
 
-  /// True after the user taps "Continue offline" on the auth screen.
-  /// The tracker then opens with the REAL app-level theme wiring —
-  /// never a pushed copy of HomeScreen (pushing one nested it inside
-  /// the Profile tab and doubled the nav bar + header).
-  bool _offline = false;
-
   @override
   void initState() {
     super.initState();
@@ -122,22 +116,16 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
       home: StreamBuilder<String?>(
         stream: AuthService.instance.authStateChanges,
         builder: (context, snapshot) {
-          final signedIn = snapshot.data != null;
-          if (signedIn && _offline) {
-            // Signed in now — the offline bypass is no longer needed.
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) setState(() => _offline = false);
-            });
-          }
-          if (signedIn || _offline) {
+          // No offline bypass (Rafi): login is mandatory. Offline is
+          // only shown AFTER login, when the device loses internet
+          // (the "Offline — will sync" pill on the Today tab).
+          if (snapshot.data != null) {
             return HomeScreen(
               dark: _dark,
               onToggleTheme: _toggleTheme,
             );
           }
-          return AuthScreen(
-            onContinueOffline: () => setState(() => _offline = true),
-          );
+          return const AuthScreen();
         },
       ),
     );

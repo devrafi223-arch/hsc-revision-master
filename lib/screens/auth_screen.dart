@@ -10,15 +10,7 @@ import '../services/supabase_init.dart';
 /// [AuthService.registerWithEmail] (email + password + name). No email-code
 /// verification step.
 class AuthScreen extends StatelessWidget {
-  const AuthScreen({super.key, this.onContinueOffline});
-
-  /// Called when the user taps "Continue offline" on the ROOT auth
-  /// gate. The app then shows the tracker from the top level — this
-  /// screen must never push a HomeScreen itself: pushing one from the
-  /// Profile tab's AuthScreen nested it inside the tab and doubled
-  /// the nav bar + header. Null when pushed from inside the app
-  /// (e.g. Profile tab), where "continue" just means "go back".
-  final VoidCallback? onContinueOffline;
+  const AuthScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -26,17 +18,15 @@ class AuthScreen extends StatelessWidget {
       navigationBar: const CupertinoNavigationBar(
         middle: Text('Welcome'),
       ),
-      child: SafeArea(
-        child: _AuthForm(onContinueOffline: onContinueOffline),
+      child: const SafeArea(
+        child: _AuthForm(),
       ),
     );
   }
 }
 
 class _AuthForm extends StatefulWidget {
-  const _AuthForm({this.onContinueOffline});
-
-  final VoidCallback? onContinueOffline;
+  const _AuthForm();
 
   @override
   State<_AuthForm> createState() => _AuthFormState();
@@ -58,21 +48,12 @@ class _AuthFormState extends State<_AuthForm> {
   }
 
   void _goHome() {
-    if (widget.onContinueOffline != null) {
-      // Root auth gate: the app-level auth stream rebuilds to
-      // HomeScreen once signed in — nothing to push here.
-      return;
-    }
-    // Pushed from inside the app (e.g. Profile tab): just go back —
-    // the auth stream rebuilds the root to HomeScreen once signed in.
-    Navigator.of(context).pop();
-  }
-
-  void _continueOffline() {
-    if (widget.onContinueOffline != null) {
-      widget.onContinueOffline!();
-      return;
-    }
+    // After sign-in the app-level auth stream rebuilds to HomeScreen.
+    // Popping returns from a pushed AuthScreen (e.g. Profile tab); on
+    // the root gate there is nothing to pop and the stream drives it.
+    // There is deliberately NO "Continue offline" escape here (Rafi):
+    // login is mandatory; offline is only shown after login, when the
+    // device loses internet (the "Offline — will sync" pill).
     Navigator.of(context).pop();
   }
 
@@ -183,21 +164,10 @@ class _AuthFormState extends State<_AuthForm> {
                   style: base.copyWith(fontSize: 14, height: 1.45),
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    CupertinoButton.filled(
-                      borderRadius: BorderRadius.circular(14),
-                      onPressed: _continueOffline,
-                      child: const Text('Continue offline'),
-                    ),
-                    if (SupabaseInit.lastError != null) ...[
-                      const SizedBox(width: 12),
-                      CupertinoButton(
-                        onPressed: _busy ? null : _tryAgain,
-                        child: const Text('Try again'),
-                      ),
-                    ],
-                  ],
+                CupertinoButton.filled(
+                  borderRadius: BorderRadius.circular(14),
+                  onPressed: _busy ? null : _tryAgain,
+                  child: const Text('Try again'),
                 ),
               ],
             ),

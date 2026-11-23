@@ -4,15 +4,40 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:hsc_revision_master/data/syllabus.dart';
 import 'package:hsc_revision_master/main.dart';
+import 'package:hsc_revision_master/screens/home_screen.dart';
 import 'package:hsc_revision_master/widgets/pomodoro_timer.dart';
 
+/// Test harness mirroring HscRevisionApp's wiring: HomeScreen with a
+/// local night-mode toggle. The auth gate has no offline bypass
+/// anymore, so tests enter the tracker directly.
+class _TestApp extends StatefulWidget {
+  const _TestApp();
+
+  @override
+  State<_TestApp> createState() => _TestAppState();
+}
+
+class _TestAppState extends State<_TestApp> {
+  bool _dark = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return CupertinoApp(
+      theme: CupertinoThemeData(
+        brightness: _dark ? Brightness.dark : Brightness.light,
+        scaffoldBackgroundColor: _dark ? JimColors.darkBg : JimColors.paper,
+      ),
+      home: HomeScreen(
+        dark: _dark,
+        onToggleTheme: () => setState(() => _dark = !_dark),
+      ),
+    );
+  }
+}
+
 void main() {
-  // Boots the app and enters the tracker through the auth gate's
-  // "Continue offline" path (local-only mode: no Firebase account).
   Future<void> enterApp(WidgetTester tester) async {
-    await tester.pumpWidget(const HscRevisionApp());
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Continue offline'));
+    await tester.pumpWidget(const _TestApp());
     await tester.pumpAndSettle();
   }
 
