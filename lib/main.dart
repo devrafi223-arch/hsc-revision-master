@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'data/syllabus.dart';
 import 'screens/home_screen.dart';
+import 'services/admin_service.dart';
 import 'services/app_log.dart';
 import 'services/auth_service.dart';
 import 'services/supabase_init.dart';
@@ -172,6 +173,16 @@ Future<void> main() async {
   // without it.
   try {
     await AuthService.instance.ensureLocalUid();
+  } catch (_) {}
+  // Admin panel without login: the first launch on a device makes its
+  // local id the device admin (AdminService's existing first-user
+  // fallback — registration used to record it). Rafi's phone gets the
+  // panel; a real is_admin flag in Supabase still wins over this.
+  try {
+    final localUid = AuthService.instance.localUid;
+    if (localUid != null) {
+      await AdminService.recordFirstUser(localUid);
+    }
   } catch (_) {}
   try {
     await MessagingService.init();

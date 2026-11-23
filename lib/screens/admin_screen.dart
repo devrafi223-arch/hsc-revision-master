@@ -89,7 +89,7 @@ class AdminScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final uid = AuthService.instance.currentUid;
+    final uid = AuthService.instance.effectiveUid;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;

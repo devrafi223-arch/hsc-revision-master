@@ -1,7 +1,7 @@
 name: hsc_revision_master
 description: "HSC Science Revision Master — soft, phone-first tracker. 7 subjects, 151 chapters, 906 milestones."
 publish_to: "none"
-version: 3.0.8+11
+version: 3.0.9+12
 
 environment:
   sdk: ^3.5.0

@@ -309,6 +309,10 @@ class CommunityService {
       'group_id': groupId,
       'is_anonymous': anonymous,
     });
+    // Refresh the feed right away: without this the sent message only
+    // appears when a Realtime event arrives (and never, if Realtime is
+    // off for the messages table — the "chat issue", 2026-11-23).
+    _notifyLocalChange();
   }
 
   Future<void> sendPhoto(
@@ -347,6 +351,7 @@ class CommunityService {
       'group_id': groupId,
       'is_anonymous': anonymous,
     });
+    _notifyLocalChange();
   }
 
   Future<void> sendVoice(
@@ -388,6 +393,7 @@ class CommunityService {
       'group_id': groupId,
       'is_anonymous': anonymous,
     });
+    _notifyLocalChange();
   }
 
   Future<void> sendPoll(
@@ -447,6 +453,7 @@ class CommunityService {
           .update({'poll_id': pollId})
           .eq('id', messageId);
     }
+    _notifyLocalChange();
   }
 
   // -- interactions -----------------------------------------------------
@@ -469,6 +476,7 @@ class CommunityService {
           .from('polls')
           .update({'votes': votes})
           .eq('id', pollRow['id']);
+      _notifyLocalChange();
     } catch (_) {
       // Best effort; the stream re-emits the stored votes on next load.
     }
@@ -584,6 +592,7 @@ class CommunityService {
       'flagged': true,
       'flag_reason': reason,
     }).eq('id', messageId);
+    _notifyLocalChange();
   }
 
   Future<void> blockUser(String uid) async {

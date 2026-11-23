@@ -141,7 +141,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadAdmin() async {
-    final uid = AuthService.instance.currentUid;
+    final uid = AuthService.instance.effectiveUid;
     if (uid == null) return;
     try {
       final admin = await AdminService.instance.isAdmin(uid);
