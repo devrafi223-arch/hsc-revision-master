@@ -4,6 +4,9 @@
          This app is sideloaded, never published on Google Play. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!-- Daily caps + usage stats (granted by the user in Settings,
+         Usage access). Without it the query returns nothing. -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
     <application
         android:label="hsc_revision_master"
         android:name="${applicationName}"

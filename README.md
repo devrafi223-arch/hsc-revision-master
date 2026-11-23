@@ -47,18 +47,46 @@ rose progress bar; a stage's tip appears only when its chip is tapped.
   status filter (All / Pending / In progress / Done)
 - 25-minute Pomodoro timer (Start / Pause / Reset)
 - **Focus Mode** (Focus tab): 15/25/45/60-minute sessions with a
-  whitelist of apps that stay usable. **Android only**, a native
+  whitelist of apps that stay usable, an optional **locked** mode
+  ("can't end early" — the End button stays off until the timer
+  finishes, and killing the app does not cancel it), and a **weekly
+  schedule** (Cold Turkey-style 15-minute blocks, edited as 1-hour
+  cells, e.g. weekdays 8:00–13:00) that auto-starts focus inside a
+  blocked run. **Android only**, a native
   `FocusAccessibilityService` watches the foreground app while a session
-  is on and shows a calm full-screen block overlay over any app that is
-  not this app or whitelisted ("Focus cholche — ei app-ta ekhon bondho",
-  with remaining time and an End focus button). Needs two permissions the
-  app guides you to: the Accessibility service and "Draw over other
-  apps" — blocking is never claimed to work until both are on. Stale
-  sessions self-clear, so blocking can never stay on forever if the app
-  is killed mid-focus. On web / Windows / Linux there is no system
-  blocking: focus hides the other tabs and shows only the current
-  chapter + timer. Whitelist and sessions live in SharedPreferences
-  (`focus-whitelist-v1`, `focus-end-v1`).
+  or a scheduled block is on and shows a calm full-screen block overlay
+  over any app that is not this app or whitelisted ("Focus cholche — ei
+  app-ta ekhon bondho", with remaining time and an End focus button,
+  hidden while locked). Needs two permissions the app guides you to:
+  the Accessibility service and "Draw over other apps" — blocking is
+  never claimed to work until both are on. Sideloaded APKs on Android
+  13+ also need the "Allow restricted settings" step in App info before
+  the Accessibility switch works — the app shows the exact steps.
+  Stale sessions self-clear, so blocking can never stay on forever if
+  the app is killed mid-focus. On web / Windows / Linux there is no
+  system blocking: focus hides the other tabs and shows only the current
+  chapter + timer. Whitelist, sessions, locked flag, schedule and caps
+  live in SharedPreferences (`focus-whitelist-v1`, `focus-end-v1`,
+  `focus-locked-v1`, `focus-schedule-v1`, `focus-caps-v1`).
+- **Daily limits** (Android): per-app daily foreground-minute caps
+  (UsageStatsManager). A cap blocks the app for the rest of the day
+  once it is used up — even outside a focus session, and even if the
+  app is whitelisted. Needs the Usage access permission.
+- **PC blocking** (Windows/Linux, best effort): while focus is on,
+  the app polls the foreground window (Win32 FFI on Windows,
+  wmctrl/xdotool on Linux) and politely asks a blocked app to close
+  (WM_CLOSE) while bringing this app to the front; a floating
+  mini-player was deliberately skipped (needs another window plugin).
+  A desktop whitelist (exe names) and hosts-file website blocking
+  (YouTube, Facebook, Instagram, TikTok, X, Reddit, Netflix → 127.0.0.1)
+  are on the Focus tab — the hosts write needs administrator rights and
+  stays off with an explanation when they are missing. Honest limits,
+  stated in the app: Task Manager can always close this app, Wayland
+  restricts window listing on Linux, and true Cold Turkey-grade lock-in
+  would need an admin-installed native helper this app does not have.
+  The same honest-limits note is on the phone side: force-stop,
+  turning Accessibility off, uninstalling, or safe mode all stop the
+  blocking.
 - Exam plan tab: HSC 2026 reference dates and marks. HSC 2027 routine was
   **not** published at research time (Nov 2026) — no 2027 date is invented.
 - Share: WhatsApp-ready summary copied to clipboard; JSON backup export
@@ -92,7 +120,9 @@ Each build is uploaded as a workflow artifact. No iOS/macOS jobs.
 flutter test   # widget tests: stage toggle, subject chip, search,
                # theme toggle, bottom nav, Pomodoro countdown/pause/reset,
                # focus store persistence, stale-session clearing,
-               # focus start/end, tab hiding on non-Android
+               # focus start/end, tab hiding on non-Android, schedule
+               # persistence + auto-start, locked sessions, daily caps,
+               # desktop whitelist, hosts-file block on a temp file
 ```
 
 ## Licence

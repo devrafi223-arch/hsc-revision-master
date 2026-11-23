@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:hsc_revision_master/focus_schedule.dart';
 import 'package:hsc_revision_master/focus_store.dart';
 import 'package:hsc_revision_master/main.dart';
 import 'package:hsc_revision_master/screens/focus_screen.dart';
@@ -72,7 +73,11 @@ void main() {
     await tester.pumpWidget(
       CupertinoApp(
         home: CupertinoPageScaffold(
-          child: FocusScreen(store: store, focusChapter: null),
+          child: FocusScreen(
+            store: store,
+            schedule: FocusSchedule(),
+            focusChapter: null,
+          ),
         ),
       ),
     );
@@ -100,6 +105,17 @@ void main() {
 
   testWidgets('home screen Focus tab opens the focus screen',
       (tester) async {
+    // The Focus screen is tall now (session + schedule + permissions +
+    // whitelist cards), so give the test a tall viewport — the whole
+    // screen fits without scrolling. (scrollUntilVisible can't be used:
+    // the schedule card's horizontal day-chips list is a second
+    // Scrollable, so the default scrollable finder is ambiguous.)
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(800, 2600);
+    addTearDown(() {
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPhysicalSize();
+    });
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(const HscRevisionApp());
     await tester.pumpAndSettle();
@@ -109,12 +125,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Focus mode'), findsOneWidget);
-    // The whitelist card sits below the fold in the ListView, so scroll
-    // it into view before asserting on it.
-    await tester.scrollUntilVisible(
-      find.text('Apps that stay usable'),
-      200,
-    );
     expect(find.text('Apps that stay usable'), findsOneWidget);
   });
 

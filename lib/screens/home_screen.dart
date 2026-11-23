@@ -7,8 +7,13 @@ import 'package:flutter/services.dart';
 
 import '../backup.dart';
 import '../data/syllabus.dart';
+import '../focus_schedule.dart';
 import '../focus_store.dart';
 import '../main.dart';
+import '../services/desktop_blocker.dart';
+import '../services/desktop_watcher.dart';
+import '../services/focus_channel.dart';
+import '../services/focus_session.dart';
 import '../tracker_store.dart';
 import '../widgets/pomodoro_timer.dart';
 import 'focus_screen.dart';
@@ -40,8 +45,14 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final TrackerStore _store = TrackerStore();
   final FocusStore _focusStore = FocusStore();
+  final FocusSchedule _schedule = FocusSchedule();
+  final FocusChannel _focusChannel = FocusChannel();
   final TextEditingController _searchController = TextEditingController();
   bool _loaded = false;
+  Timer? _scheduleTimer;
+  late final DesktopWatcher _desktopWatcher =
+      DesktopWatcher(createDesktopBlocker());
+  String? _desktopBlockedExe;
 
   /// True only on real Android — system-wide blocking exists there only.
   bool get _isAndroid =>
@@ -72,12 +83,93 @@ class _HomeScreenState extends State<HomeScreen> {
     _focusStore.load().then((_) {
       if (mounted) setState(() {});
     });
+    _schedule.load().then((_) {
+      if (mounted) setState(() {});
+    });
+    // Schedule ticker: every 30s, auto-start focus inside a scheduled
+    // block (and resume it after a short manual session ends mid-block).
+    // It only calls setState when something actually changed, so widget
+    // tests using pumpAndSettle are not disturbed.
+    _scheduleTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _checkSchedule();
+    });
+  }
+
+  /// Auto-start a session when the weekly schedule says focus is on.
+  /// Never restarts a block the user just ended early (dismissed), and
+  /// never starts anything when no block is set.
+  Future<void> _checkSchedule() async {
+    final now = DateTime.now();
+    if (!_schedule.isBlockedAt(now) ||
+        _focusStore.isActive ||
+        _focusStore.scheduleDismissedNow) {
+      return;
+    }
+    final end = _schedule.activeBlockEnd(now);
+    if (end == null) return;
+    await FocusSession.start(
+      store: _focusStore,
+      schedule: _schedule,
+      channel: _focusChannel,
+      end: end,
+      chapterId: _focusChapter?.chapter.id,
+      auto: true,
+    );
+    _syncDesktopWatcher();
+    if (mounted) setState(() {});
+  }
+
+  /// Keep the PC watcher in step with focus: watch while a session or
+  /// a scheduled block is active, stop otherwise.
+  void _syncDesktopWatcher() {
+    final blocking = _focusStore.isActive ||
+        (_schedule.isBlockedAt(DateTime.now()) &&
+            !_focusStore.scheduleDismissedNow);
+    if (!blocking) {
+      _desktopWatcher.stop();
+      if (_desktopBlockedExe != null) {
+        _desktopBlockedExe = null;
+        if (mounted) setState(() {});
+      }
+      return;
+    }
+    _desktopWatcher.start(
+      isBlocking: () =>
+          _focusStore.isActive ||
+          (_schedule.isBlockedAt(DateTime.now()) &&
+              !_focusStore.scheduleDismissedNow),
+      allowedExeNames: _focusStore.desktopWhitelist,
+      onBlocked: (exe) {
+        _desktopBlockedExe = exe;
+        if (mounted) setState(() {});
+      },
+      onReturned: () {
+        if (_desktopBlockedExe != null) {
+          _desktopBlockedExe = null;
+          if (mounted) setState(() {});
+        }
+      },
+    );
+  }
+
+  Future<void> _endDesktopFocus() async {
+    final ended = await FocusSession.end(
+      store: _focusStore,
+      schedule: _schedule,
+      channel: _focusChannel,
+    );
+    if (!ended) return; // locked session: End stays off until it ends
+    _desktopWatcher.stop();
+    _desktopBlockedExe = null;
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _searchController.dispose();
     _toastTimer?.cancel();
+    _scheduleTimer?.cancel();
+    _desktopWatcher.stop();
     super.dispose();
   }
 
@@ -288,6 +380,77 @@ class _HomeScreenState extends State<HomeScreen> {
           : '~${(remaining / daysLeft).toStringAsFixed(1)} tasks/day';
     }
 
+    // PC blocking: a blocked foreground app takes over the whole
+    // screen with the block message until the user comes back.
+    if (_loaded && _desktopBlockedExe != null) {
+      return CupertinoPageScaffold(
+        navigationBar: const CupertinoNavigationBar(
+          middle: Text('Focus'),
+        ),
+        child: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(0, 16, 0, _pagePadding),
+            children: [
+              _JimCard(
+                child: Column(
+                  children: [
+                    const SizedBox(height: 16),
+                    Text(
+                      _focusStore.remainingLabel,
+                      key: const Key('desktop-block-remaining'),
+                      style: CupertinoTheme.of(context)
+                          .textTheme
+                          .textStyle
+                          .copyWith(
+                            fontSize: 64,
+                            fontWeight: FontWeight.w600,
+                            height: 1.2,
+                            fontFeatures: const [
+                              FontFeature.tabularFigures()
+                            ],
+                          ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Blocked app: $_desktopBlockedExe',
+                      textAlign: TextAlign.center,
+                      style: CupertinoTheme.of(context)
+                          .textTheme
+                          .textStyle
+                          .copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Focus cholche — ei app-ta ekhon bondho. '
+                      'The app was asked to close; come back here to study.',
+                      textAlign: TextAlign.center,
+                      style: CupertinoTheme.of(context)
+                          .textTheme
+                          .textStyle
+                          .copyWith(fontSize: 15, height: 1.45),
+                    ),
+                    const SizedBox(height: 28),
+                    SizedBox(
+                      width: double.infinity,
+                      child: CupertinoButton.filled(
+                        key: const Key('desktop-block-end'),
+                        minimumSize: const Size(48, 56),
+                        borderRadius: BorderRadius.circular(14),
+                        onPressed:
+                            _focusStore.canEnd ? _endDesktopFocus : null,
+                        child: const Text('End focus'),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     // Non-Android focus: hide every other tab, show only the focus view.
     if (_loaded && _inAppFocusActive) {
       return CupertinoPageScaffold(
@@ -297,8 +460,12 @@ class _HomeScreenState extends State<HomeScreen> {
         child: SafeArea(
           child: FocusScreen(
             store: _focusStore,
+            schedule: _schedule,
             focusChapter: _focusChapter,
-            onFocusChanged: () => setState(() {}),
+            onFocusChanged: () {
+              _syncDesktopWatcher();
+              setState(() {});
+            },
           ),
         ),
       );
@@ -406,8 +573,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 return CupertinoTabView(
                                   builder: (context) => FocusScreen(
                                     store: _focusStore,
+                                    schedule: _schedule,
                                     focusChapter: _focusChapter,
-                                    onFocusChanged: () => setState(() {}),
+                                    onFocusChanged: () {
+                                      _syncDesktopWatcher();
+                                      setState(() {});
+                                    },
                                   ),
                                 );
                               default:
