@@ -1,20 +1,21 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/community_message.dart';
 import 'auth_service.dart';
-import 'firebase_init.dart';
 import 'moderation.dart';
 import 'offline_queue.dart';
+import 'supabase_init.dart';
 import 'user_repository.dart';
 
 /// Universal community (groupId == null) + group chats (groupId set).
-/// Firestore collection `messages`.
+/// Supabase table `messages`; polls live in the `polls` table and are
+/// attached to their message when read.
 ///
 /// Moderation: [Moderation.isFlagged] runs on every text/photo message.
 /// A flagged message is stored with flagged=true and its text replaced by
@@ -24,6 +25,11 @@ import 'user_repository.dart';
 /// Offline: writes are enqueued into [OfflineQueue] and persisted as JSON
 /// in SharedPreferences under key 'offline-queue-v1'; [SyncService] replays
 /// them when the device is back online.
+///
+/// Bookmarks are LOCAL ONLY (a Set of message ids in SharedPreferences
+/// under 'bookmarked-messages-v1'): there is no bookmark column in the
+/// `messages` table. [messagesStream] merges the local set into each
+/// message's `bookmarkedBy` so the screens' bookmark filter keeps working.
 class CommunityService {
   CommunityService._();
 
@@ -32,8 +38,23 @@ class CommunityService {
   /// SharedPreferences key holding the offline queue JSON.
   static const String queueKey = 'offline-queue-v1';
 
-  CollectionReference<Map<String, dynamic>> get _messages =>
-      FirebaseFirestore.instance.collection('messages');
+  /// SharedPreferences key holding the local bookmarked message ids.
+  static const String bookmarksKey = 'bookmarked-messages-v1';
+
+  /// Storage bucket for community photos / voice messages. The schema
+  /// documents a single public bucket named 'notes' (see supabase/schema.sql).
+  static const String _storageBucket = 'notes';
+
+  SupabaseClient get _db => SupabaseInit.client;
+
+  /// Notifies live streams when a local-only change (e.g. a bookmark
+  /// toggle) happens, so they re-emit with the merged local state.
+  static final StreamController<void> _localChanges =
+      StreamController<void>.broadcast();
+
+  static void _notifyLocalChange() {
+    if (!_localChanges.isClosed) _localChanges.add(null);
+  }
 
   // -- offline queue persistence (shared with SyncService) -------------
 
@@ -60,6 +81,32 @@ class CommunityService {
     await persistQueue(queue);
   }
 
+  // -- local bookmarks ----------------------------------------------------
+
+  Set<String> _bookmarkedIds = {};
+  bool _bookmarksLoaded = false;
+
+  Future<void> _loadBookmarks() async {
+    if (_bookmarksLoaded) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _bookmarkedIds =
+          (prefs.getStringList(bookmarksKey) ?? []).toSet();
+    } catch (_) {
+      _bookmarkedIds = {};
+    }
+    _bookmarksLoaded = true;
+  }
+
+  Future<void> _persistBookmarks() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(bookmarksKey, _bookmarkedIds.toList());
+    } catch (_) {
+      // Bookmarks are best effort; the in-memory set is kept.
+    }
+  }
+
   // -- helpers ----------------------------------------------------------
 
   Future<(String, String)> _author() async {
@@ -82,34 +129,142 @@ class CommunityService {
     required String storagePath,
     required String contentType,
   }) async {
-    final ref = FirebaseStorage.instance.ref().child(storagePath);
-    await ref.putData(
-      bytes,
-      SettableMetadata(contentType: contentType),
-    );
-    return ref.getDownloadURL();
+    await _db.storage.from(_storageBucket).uploadBinary(
+          storagePath,
+          bytes,
+          fileOptions: FileOptions(contentType: contentType, upsert: true),
+        );
+    return _db.storage.from(_storageBucket).getPublicUrl(storagePath);
+  }
+
+  /// Reads the latest messages from Supabase (oldest first — ordered by
+  /// `created_at` ascending), attaches each message's poll row, and merges
+  /// the local bookmark set into `bookmarkedBy`.
+  Future<List<CommunityMessage>> _fetchMessages({String? groupId}) async {
+    await _loadBookmarks();
+    final uid = AuthService.instance.currentUid;
+    final query = _db.from('messages').select();
+    // Filters go BEFORE order/limit: select() returns a FilterBuilder
+    // (eq/isFilter live there); order()/limit() return a TransformBuilder.
+    final List<dynamic> rows;
+    if (groupId == null) {
+      rows = await query
+          .isFilter('group_id', null)
+          .order('created_at', ascending: true)
+          .limit(100);
+    } else {
+      rows = await query
+          .eq('group_id', groupId)
+          .order('created_at', ascending: true)
+          .limit(100);
+    }
+    final maps = rows
+        .whereType<Map>()
+        .map((row) => row.cast<String, dynamic>())
+        .toList();
+
+    // Attach polls: one `polls` row per poll message, keyed by message_id.
+    if (maps.isNotEmpty) {
+      final ids = maps.map((m) => m['id'].toString()).toList();
+      try {
+        final pollRows = await _db
+            .from('polls')
+            .select()
+            .inFilter('message_id', ids);
+        final byMessage = <String, Map<String, dynamic>>{};
+        for (final row in (pollRows as List).whereType<Map>()) {
+          final map = row.cast<String, dynamic>();
+          byMessage[(map['message_id'] as Object?)?.toString() ?? ''] = {
+            'id': map['id'],
+            'question': map['question'],
+            'options': map['options'],
+            'votes': map['votes'],
+          };
+        }
+        for (final m in maps) {
+          final poll = byMessage[m['id'].toString()];
+          if (poll != null) m['poll'] = poll;
+        }
+      } catch (_) {
+        // Polls are best effort; messages still show without them.
+      }
+    }
+
+    final messages = maps
+        .map((m) => CommunityMessage.fromMap(m['id'].toString(), m))
+        .toList();
+    if (uid == null) return messages;
+    // Merge local bookmarks so `message.bookmarkedBy` reflects this
+    // device's bookmark set (bookmarks are local-only, see class doc).
+    return messages
+        .map(
+          (m) => _bookmarkedIds.contains(m.id)
+              ? CommunityMessage(
+                  id: m.id,
+                  authorId: m.authorId,
+                  authorName: m.authorName,
+                  authorPhoto: m.authorPhoto,
+                  text: m.text,
+                  photoUrl: m.photoUrl,
+                  voiceUrl: m.voiceUrl,
+                  replyToId: m.replyToId,
+                  replyToText: m.replyToText,
+                  type: m.type,
+                  timestamp: m.timestamp,
+                  poll: m.poll,
+                  pinned: m.pinned,
+                  reactions: m.reactions,
+                  bookmarkedBy: [uid],
+                  flagged: m.flagged,
+                  flagReason: m.flagReason,
+                  groupId: m.groupId,
+                  isAnonymous: m.isAnonymous,
+                )
+              : m,
+        )
+        .toList();
   }
 
   // -- reading ----------------------------------------------------------
 
-  /// Newest first. Offline → an empty list (queued messages live in the
-  /// offline queue until they sync).
+  /// Oldest first (ordered by `created_at` ascending). Offline → an empty
+  /// list (queued messages live in the offline queue until they sync).
   ///
-  /// NOTE: results are sorted client-side so no composite Firestore index
-  /// is needed for the groupId filter + timestamp order.
+  /// NOTE: the old Firestore version returned newest-first; this version
+  /// returns chronological order (oldest at the top, newest at the bottom),
+  /// as the Supabase migration spec requires. Screens showing the feed
+  /// may want to scroll to the bottom on new messages.
   Stream<List<CommunityMessage>> messagesStream({String? groupId}) {
-    if (!FirebaseInit.isOnlineMode) return Stream.value([]);
-    return _messages
-        .where('groupId', isEqualTo: groupId)
-        .limit(100)
-        .snapshots()
-        .map((snapshot) {
-      final messages = snapshot.docs
-          .map((doc) => CommunityMessage.fromMap(doc.id, doc.data()))
-          .toList();
-      messages.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-      return messages;
-    });
+    if (!SupabaseInit.isOnlineMode) return Stream.value([]);
+    final controller = StreamController<List<CommunityMessage>>();
+    var closed = false;
+    Future<void> emit() async {
+      try {
+        final messages = await _fetchMessages(groupId: groupId);
+        if (!closed) controller.add(messages);
+      } catch (_) {
+        // Keep the stream alive; the next Realtime event retries.
+      }
+    }
+
+    unawaited(emit());
+    final channel = _db
+        .channel('public:messages:${groupId ?? 'all'}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'messages',
+          callback: (_) => unawaited(emit()),
+        )
+        .subscribe();
+    final localSub = _localChanges.stream.listen((_) => unawaited(emit()));
+    controller.onCancel = () async {
+      closed = true;
+      await localSub.cancel();
+      await channel.unsubscribe();
+      await controller.close();
+    };
+    return controller.stream;
   }
 
   // -- sending ----------------------------------------------------------
@@ -124,7 +279,7 @@ class CommunityService {
     final reason = flagged ? Moderation.flagReason(text) : null;
     final storedText = flagged ? 'Removed by moderation' : text;
 
-    if (!FirebaseInit.isOnlineMode) {
+    if (!SupabaseInit.isOnlineMode) {
       final op = <String, dynamic>{
         'type': 'message',
         'messageType': 'text',
@@ -142,19 +297,17 @@ class CommunityService {
       return;
     }
 
-    await _messages.add({
-      'authorId': uid,
-      'authorName': name,
-      'text': storedText,
+    await _db.from('messages').insert({
+      'author_id': uid,
+      'author_name': name,
+      'body': storedText,
       'type': 'text',
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
       'pinned': false,
       'reactions': <String, int>{},
-      'bookmarkedBy': <String>[],
       'flagged': flagged,
-      'flagReason': reason,
-      'groupId': groupId,
-      'isAnonymous': anonymous,
+      'flag_reason': reason,
+      'group_id': groupId,
+      'is_anonymous': anonymous,
     });
   }
 
@@ -164,7 +317,7 @@ class CommunityService {
     bool anonymous = false,
   }) async {
     final (uid, name) = await _author();
-    if (!FirebaseInit.isOnlineMode) {
+    if (!SupabaseInit.isOnlineMode) {
       await _enqueue({
         'type': 'message',
         'messageType': 'photo',
@@ -183,18 +336,16 @@ class CommunityService {
           'community/$uid/${DateTime.now().millisecondsSinceEpoch}.jpg',
       contentType: 'image/jpeg',
     );
-    await _messages.add({
-      'authorId': uid,
-      'authorName': name,
-      'photoUrl': url,
+    await _db.from('messages').insert({
+      'author_id': uid,
+      'author_name': name,
+      'photo_url': url,
       'type': 'photo',
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
       'pinned': false,
       'reactions': <String, int>{},
-      'bookmarkedBy': <String>[],
       'flagged': false,
-      'groupId': groupId,
-      'isAnonymous': anonymous,
+      'group_id': groupId,
+      'is_anonymous': anonymous,
     });
   }
 
@@ -205,7 +356,7 @@ class CommunityService {
     bool anonymous = false,
   }) async {
     final (uid, name) = await _author();
-    if (!FirebaseInit.isOnlineMode) {
+    if (!SupabaseInit.isOnlineMode) {
       await _enqueue({
         'type': 'message',
         'messageType': 'voice',
@@ -225,19 +376,17 @@ class CommunityService {
           'community/voice/$uid/${DateTime.now().millisecondsSinceEpoch}.m4a',
       contentType: 'audio/m4a',
     );
-    await _messages.add({
-      'authorId': uid,
-      'authorName': name,
-      'voiceUrl': url,
-      'text': 'Voice message ($seconds s)',
+    await _db.from('messages').insert({
+      'author_id': uid,
+      'author_name': name,
+      'voice_url': url,
+      'body': 'Voice message ($seconds s)',
       'type': 'voice',
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
       'pinned': false,
       'reactions': <String, int>{},
-      'bookmarkedBy': <String>[],
       'flagged': false,
-      'groupId': groupId,
-      'isAnonymous': anonymous,
+      'group_id': groupId,
+      'is_anonymous': anonymous,
     });
   }
 
@@ -253,7 +402,7 @@ class CommunityService {
       question: question,
       options: options,
     );
-    if (!FirebaseInit.isOnlineMode) {
+    if (!SupabaseInit.isOnlineMode) {
       await _enqueue({
         'type': 'message',
         'messageType': 'poll',
@@ -265,55 +414,85 @@ class CommunityService {
       });
       return;
     }
-    await _messages.add({
-      'authorId': uid,
-      'authorName': name,
-      'poll': poll.toMap(),
-      'type': 'poll',
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'pinned': false,
-      'reactions': <String, int>{},
-      'bookmarkedBy': <String>[],
-      'flagged': false,
-      'groupId': groupId,
-      'isAnonymous': anonymous,
-    });
+    final messageRow = await _db
+        .from('messages')
+        .insert({
+          'author_id': uid,
+          'author_name': name,
+          'type': 'poll',
+          'pinned': false,
+          'reactions': <String, int>{},
+          'flagged': false,
+          'group_id': groupId,
+          'is_anonymous': anonymous,
+        })
+        .select('id')
+        .single();
+    final messageId = (messageRow['id'] as Object?)?.toString();
+    if (messageId == null) return;
+    final pollRow = await _db
+        .from('polls')
+        .insert({
+          'message_id': messageId,
+          'question': question,
+          'options': options,
+          'votes': <String, int>{},
+        })
+        .select('id')
+        .single();
+    final pollId = (pollRow['id'] as Object?)?.toString();
+    if (pollId != null) {
+      await _db
+          .from('messages')
+          .update({'poll_id': pollId})
+          .eq('id', messageId);
+    }
   }
 
   // -- interactions -----------------------------------------------------
 
-  /// One vote per user: the Firestore transaction writes
+  /// One vote per user: the `polls` row's `votes` map is updated with
   /// votes[currentUid] = optionIndex, overwriting any previous vote.
   Future<void> vote(String messageId, int optionIndex) async {
     final uid = AuthService.instance.currentUid;
-    if (uid == null || !FirebaseInit.isOnlineMode) return;
-    final ref = _messages.doc(messageId);
-    await FirebaseFirestore.instance.runTransaction((tx) async {
-      final doc = await tx.get(ref);
-      final data = doc.data();
-      if (data == null) return;
-      final poll = data['poll'];
-      if (poll is! Map) return;
-      final votes = Map<String, dynamic>.from(poll['votes'] as Map? ?? {});
+    if (uid == null || !SupabaseInit.isOnlineMode) return;
+    try {
+      final pollRow = await _db
+          .from('polls')
+          .select('id, votes')
+          .eq('message_id', messageId)
+          .maybeSingle();
+      if (pollRow == null) return;
+      final votes = Map<String, dynamic>.from(pollRow['votes'] as Map? ?? {});
       votes[uid] = optionIndex;
-      tx.update(ref, {
-        'poll.votes': votes,
-      });
-    });
+      await _db
+          .from('polls')
+          .update({'votes': votes})
+          .eq('id', pollRow['id']);
+    } catch (_) {
+      // Best effort; the stream re-emits the stored votes on next load.
+    }
   }
 
   Future<void> react(String messageId, String emoji) async {
-    if (!FirebaseInit.isOnlineMode) return;
-    final ref = _messages.doc(messageId);
-    await FirebaseFirestore.instance.runTransaction((tx) async {
-      final doc = await tx.get(ref);
-      final data = doc.data();
-      if (data == null) return;
+    if (!SupabaseInit.isOnlineMode) return;
+    try {
+      final row = await _db
+          .from('messages')
+          .select('reactions')
+          .eq('id', messageId)
+          .maybeSingle();
+      if (row == null) return;
       final reactions =
-          Map<String, dynamic>.from(data['reactions'] as Map? ?? {});
+          Map<String, dynamic>.from(row['reactions'] as Map? ?? {});
       reactions[emoji] = ((reactions[emoji] as num?)?.toInt() ?? 0) + 1;
-      tx.update(ref, {'reactions': reactions});
-    });
+      await _db
+          .from('messages')
+          .update({'reactions': reactions})
+          .eq('id', messageId);
+    } catch (_) {
+      // Best effort.
+    }
   }
 
   Future<void> reply(
@@ -325,7 +504,7 @@ class CommunityService {
     final (uid, name) = await _author();
     final flagged = Moderation.isFlagged(text);
     final storedText = flagged ? 'Removed by moderation' : text;
-    if (!FirebaseInit.isOnlineMode) {
+    if (!SupabaseInit.isOnlineMode) {
       final op = <String, dynamic>{
         'type': 'message',
         'messageType': 'text',
@@ -342,54 +521,52 @@ class CommunityService {
       await _enqueue(op);
       return;
     }
-    await _messages.add({
-      'authorId': uid,
-      'authorName': name,
-      'isAnonymous': anonymous,
-      'text': storedText,
+    await _db.from('messages').insert({
+      'author_id': uid,
+      'author_name': name,
+      'is_anonymous': anonymous,
+      'body': storedText,
       'type': 'text',
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'replyToId': messageId,
-      'replyToText': replyToText,
+      'reply_to': messageId,
+      'reply_to_text': replyToText,
       'pinned': false,
       'reactions': <String, int>{},
-      'bookmarkedBy': <String>[],
       'flagged': flagged,
-      'flagReason': flagged ? Moderation.flagReason(text) : null,
+      'flag_reason': flagged ? Moderation.flagReason(text) : null,
     });
   }
 
   Future<void> togglePin(String messageId, bool pinned) async {
-    if (!FirebaseInit.isOnlineMode) return;
-    await _messages.doc(messageId).update({'pinned': pinned});
+    if (!SupabaseInit.isOnlineMode) return;
+    try {
+      await _db
+          .from('messages')
+          .update({'pinned': pinned})
+          .eq('id', messageId);
+    } catch (_) {
+      // Best effort.
+    }
   }
 
+  /// Toggles the local bookmark for this message (bookmarks are
+  /// local-only — see the class doc). The feed stream re-emits so the
+  /// screens' bookmark filter updates.
   Future<void> toggleBookmark(String messageId) async {
     final uid = AuthService.instance.currentUid;
-    if (uid == null || !FirebaseInit.isOnlineMode) return;
-    final ref = _messages.doc(messageId);
-    await FirebaseFirestore.instance.runTransaction((tx) async {
-      final doc = await tx.get(ref);
-      final data = doc.data();
-      if (data == null) return;
-      final bookmarked =
-          (data['bookmarkedBy'] as List?)?.map((e) => e.toString()).toList() ??
-              [];
-      if (bookmarked.contains(uid)) {
-        tx.update(ref, {
-          'bookmarkedBy': FieldValue.arrayRemove([uid]),
-        });
-      } else {
-        tx.update(ref, {
-          'bookmarkedBy': FieldValue.arrayUnion([uid]),
-        });
-      }
-    });
+    if (uid == null) return;
+    await _loadBookmarks();
+    if (_bookmarkedIds.contains(messageId)) {
+      _bookmarkedIds.remove(messageId);
+    } else {
+      _bookmarkedIds.add(messageId);
+    }
+    await _persistBookmarks();
+    _notifyLocalChange();
   }
 
   Future<void> report(String messageId, String reason) async {
     final uid = AuthService.instance.currentUid;
-    if (!FirebaseInit.isOnlineMode) {
+    if (!SupabaseInit.isOnlineMode) {
       await _enqueue({
         'type': 'report',
         'messageId': messageId,
@@ -398,22 +575,21 @@ class CommunityService {
       });
       return;
     }
-    await FirebaseFirestore.instance.collection('reports').add({
-      'messageId': messageId,
-      'reporterUid': uid,
+    await _db.from('reports').insert({
+      'message_id': messageId,
+      'reporter_id': uid,
       'reason': reason,
-      'createdAt': DateTime.now().millisecondsSinceEpoch,
     });
-    await _messages.doc(messageId).update({
+    await _db.from('messages').update({
       'flagged': true,
-      'flagReason': reason,
-    });
+      'flag_reason': reason,
+    }).eq('id', messageId);
   }
 
   Future<void> blockUser(String uid) async {
     final myUid = AuthService.instance.currentUid;
     if (myUid == null) return;
-    if (!FirebaseInit.isOnlineMode) {
+    if (!SupabaseInit.isOnlineMode) {
       await _enqueue({
         'type': 'block',
         'uid': myUid,
@@ -421,8 +597,21 @@ class CommunityService {
       });
       return;
     }
-    await FirebaseFirestore.instance.collection('users').doc(myUid).update({
-      'blockedIds': FieldValue.arrayUnion([uid]),
-    });
+    try {
+      final row = await _db
+          .from('users')
+          .select('blocked_ids')
+          .eq('id', myUid)
+          .maybeSingle();
+      final blocked =
+          (row?['blocked_ids'] as List?)?.map((e) => e.toString()).toList() ??
+              [];
+      if (!blocked.contains(uid)) blocked.add(uid);
+      await _db.from('users').update({
+        'blocked_ids': blocked,
+      }).eq('id', myUid);
+    } catch (_) {
+      // Best effort.
+    }
   }
 }

@@ -85,5 +85,5 @@ class TrackerStore {
       .toList();
 
   // NOTE (v3): JSON backup/restore and clipboard share were removed at
-  // Rafi's request — cloud sync (Firestore) replaces them.
+  // Rafi's request — cloud sync (Supabase) replaces them.
 }

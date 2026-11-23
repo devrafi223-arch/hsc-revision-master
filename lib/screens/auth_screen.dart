@@ -7,7 +7,8 @@ import 'home_screen.dart';
 /// Email + password + Google sign-in, Cupertino only.
 ///
 /// Register flow: create the account directly with
-/// [AuthService.registerWithEmail] (email + password + name). No OTP.
+/// [AuthService.registerWithEmail] (email + password + name). No email-code
+/// verification step.
 class AuthScreen extends StatelessWidget {
   const AuthScreen({super.key});
 
@@ -146,7 +147,7 @@ class _AuthFormState extends State<_AuthForm> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Online features need Firebase setup — you can still use the tracker offline.',
+                  'Online features need Supabase setup — you can still use the tracker offline.',
                   style: base.copyWith(fontSize: 14, height: 1.45),
                 ),
                 const SizedBox(height: 12),

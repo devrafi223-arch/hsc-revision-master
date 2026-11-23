@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Defense in depth for the native Android network stack (plugins, FCM).
+     Dart's own HTTPS (all Supabase traffic, images) does NOT use this file —
+     it is pinned in code via lib/security/pinned_http_client.dart, because
+     Flutter's dart:io TLS stack bypasses Android's network security config.
+     This file only forbids cleartext (http://) on the native side. -->
+<network-security-config>
+  <base-config cleartextTrafficPermitted="false">
+    <trust-anchors>
+      <certificates src="system" />
+    </trust-anchors>
+  </base-config>
+</network-security-config>

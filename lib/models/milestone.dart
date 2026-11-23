@@ -1,8 +1,6 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 /// A milestone earned by finishing a chapter fully. One milestone per
 /// subject + chapter — the display name comes from [Milestones.nameFor].
-/// Stored in Firestore collection `milestones` (doc id = milestone id).
+/// Stored in the Supabase `milestones` table.
 class Milestone {
   Milestone({
     required this.id,
@@ -22,16 +20,17 @@ class Milestone {
         'name': name,
         'subject': subject,
         'chapterTitle': chapterTitle,
-        // Epoch millis: JSON-safe (offline queue) and Firestore-safe.
+        // Epoch millis: JSON-safe (offline queue) and parses back
+        // through fromMap.
         'earnedAt': earnedAt.millisecondsSinceEpoch,
       };
 
+  /// Accepts both the app map shape ([toMap]) and a raw Supabase row
+  /// (`unlocked_at` ISO string, `chapter_id` instead of `chapterTitle`).
   factory Milestone.fromMap(String id, Map<String, dynamic> m) {
-    final raw = m['earnedAt'];
+    final raw = m['unlocked_at'] ?? m['earnedAt'];
     final DateTime earnedAt;
-    if (raw is Timestamp) {
-      earnedAt = raw.toDate();
-    } else if (raw is num) {
+    if (raw is num) {
       earnedAt = DateTime.fromMillisecondsSinceEpoch(raw.toInt(), isUtc: true)
           .toLocal();
     } else if (raw is String) {
@@ -43,7 +42,9 @@ class Milestone {
       id: id,
       name: (m['name'] as String?) ?? '',
       subject: (m['subject'] as String?) ?? '',
-      chapterTitle: (m['chapterTitle'] as String?) ?? '',
+      chapterTitle: (m['chapterTitle'] as String?) ??
+          (m['chapter_id'] as String?) ??
+          '',
       earnedAt: earnedAt,
     );
   }

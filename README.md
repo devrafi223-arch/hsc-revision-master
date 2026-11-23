@@ -81,70 +81,79 @@ flutter test   # widget tests: syllabus count, stage toggle, subject chip,
                # Pomodoro countdown/pause/reset
 ```
 
-## Firebase setup (required for online features)
+## Supabase setup (required for online features)
 
-The app runs in **LOCAL-ONLY mode** until you connect a real Firebase
+The app runs in **LOCAL-ONLY mode** until you connect a real Supabase
 project. In local-only mode everything on-device works — tracker progress,
 Pomodoro, per-chapter notes, milestones, badges, daily plan — but accounts,
 community, groups, leaderboard, cloud sync and push notifications do not.
 
 ### What works offline vs what needs config
 
-| Works offline (no setup) | Needs Firebase config |
+| Works offline (no setup) | Needs Supabase config |
 |---|---|
 | Tracker progress (151 chapters / 906 milestones) | Email + password registration, Google sign-in |
 | Per-chapter notes (text + photo, on-device) | Universal community, polls, voice messages |
 | Milestones + badges, streak, daily target plan | Leaderboard, follow, profiles, cover photo |
-| Offline queue — work done offline auto-syncs later | Groups (6-char join codes), admin panel, FCM |
+| Offline queue — work done offline auto-syncs later | Groups (6-char join codes), admin panel, push |
 
 ### Steps (Rafi)
 
-1. Go to https://console.firebase.google.com and create a project
-   (any name, e.g. `hsc-revision-master`).
-2. **Add an Android app**: package name `com.rafi.hscrevise`
-   (it must match `android/app/build.gradle.kts`).
-   Download `google-services.json` into `android/app/`.
-3. **Add a Web app** in the same project. Copy the config values it shows
-   (`apiKey`, `appId`, `messagingSenderId`, `projectId`, `storageBucket`)
-   into `lib/firebase_options.dart`, replacing the `TODO-WEB-APP-ID` value
-   in the `web` options. (Android is already wired: project
-   `massenger-b9169`, package `com.rafi.hscrevise`.)
-   (Or run `flutterfire configure` to regenerate that file.)
-4. **Authentication**: in the Firebase console → Authentication →
-   Sign-in method → enable **Email/Password** and **Google**.
-5. **Firestore**: console → Firestore Database → Create database
-   (production mode; the app creates collections `users`, `messages`,
-   `notes`, `groups`, `reports` itself).
-6. **Storage**: console → Storage → Get started (default bucket).
-   The app uploads to `community/...` and `notes/<uid>/<chapterId>.jpg`.
-7. **FCM**: console → Cloud Messaging — no extra step for Android;
-   for Web, FCM needs a `firebase-messaging-sw.js` service worker
-   (not included yet — push on web is a TODO).
-8. Run `flutter pub get` and rebuild. When the real config is in place,
-   `FirebaseInit.isOnlineMode` becomes true and the auth screen appears.
+1. Go to https://supabase.com and create a project
+   (any name, e.g. `hsc-revision-master`). Wait for the database to finish
+   provisioning.
+2. **Create the tables**: in the Supabase dashboard → SQL Editor, open a
+   new query and run the whole of `supabase/schema.sql` from this repo
+   (tables for users/profiles, messages, notes, groups, reports, polls,
+   reactions, bookmarks and the rest). Re-running it is safe — it uses
+   `create table if not exists`.
+3. **Create the Storage bucket**: dashboard → Storage → New bucket,
+   name it exactly `notes`, public. Chapter-note photos and community
+   photos are uploaded there under `notes/<uid>/<chapterId>.jpg` and
+   `community/...`.
+4. **Copy the API credentials**: dashboard → Settings → API. Copy the
+   **Project URL** and the **anon public key** into
+   `lib/supabase_config.dart`, replacing the `TODO-` placeholder values.
+   Use the **anon key only — NEVER paste the `service_role` key** into the
+   app (it bypasses Row Level Security and must stay server-side only).
+5. **Authentication**: dashboard → Authentication → Providers → enable
+   **Email** and **Google**. For Google: create the OAuth client in
+   Google Cloud Console, paste its client ID + secret into the Google
+   provider settings, and add the app's redirect URL (shown on that same
+   provider page, e.g. `https://<project-ref>.supabase.co/auth/v1/callback`)
+   to the Google client's authorised redirect URIs.
+6. Run `flutter pub get` and rebuild. When the real config is in place,
+   `SupabaseInit.isOnlineMode` becomes true and the auth screen appears.
+
+> ⚠️ **TEST-ONLY Row Level Security warning:** `supabase/schema.sql`
+> ships with permissive, test-only RLS policies so the app works while
+> you develop. Before any public launch, replace them with restrictive
+> policies (users can only read/write their own rows, admins only their
+> own admin actions) — do **not** ship the test policies to real users.
 
 ### Local-fallback admin
 
 The first user to register on a fresh install becomes the admin on that
 device (uid stored in SharedPreferences key `first-user-uid`) until a real
 flag is set. To make an admin properly, set `isAdmin: true` on that user's
-document in Firestore collection `users` in the console.
+row in the users table (Supabase dashboard → Table Editor).
 
 ### Known TODOs / honest limits
 
-- **No OTP system**: registration is email + password only, plus Google
-  Sign-In. The earlier OTP code (`sendOtp` / `verifyOtp`, Firestore
-  collection `email_otps`, `crypto` dependency) was removed entirely —
-  there is no email code to send and no code screen.
+- **No email-code verification**: registration is email + password only,
+  plus Google Sign-In. The earlier email-code system was removed
+  entirely — there is no email code to send and no code screen.
 - **Voice recording is a stub**: `VoiceService` returns null until the
   `record` + `just_audio` packages are added (kept out to keep the build
   light). The UI shows "voice recording coming soon" — nothing is faked.
 - **Weekly leaderboard filter is a TODO**: `leaderboardWeekly` orders by
   all-time `totalChaptersDone`; a true weekly ranking needs a
-  `chaptersDoneThisWeek` counter field in Firestore first.
-- **FCM server send is a TODO**: the app can receive pushes and shows
+  `chaptersDoneThisWeek` counter column on the user profile row in
+  Supabase first.
+- **Push notifications are a TODO**: the app can receive pushes and shows
   milestone notifications in-app, but sending a push to other devices
-  needs a server / Cloud Function — the app never fakes a server send.
+  needs a real server send — a Supabase Edge Function + FCM server key —
+  the app never fakes a server send.
 - Group creation while offline is kept on-device only and is not synced
   yet (only `message` and `note` queue ops replay in `SyncService`).
 

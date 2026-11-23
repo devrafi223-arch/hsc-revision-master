@@ -13,15 +13,13 @@ dependencies:
   cupertino_icons: ^1.0.8
   shared_preferences: ^2.3.0
   path_provider: ^2.1.0
-  # --- v3 online features (Firebase backend) ---
-  firebase_core: ^4.0.0
-  firebase_auth: ^6.0.0
-  cloud_firestore: ^6.0.0
-  firebase_storage: ^13.0.0
-  firebase_messaging: ^16.0.0
-  google_sign_in: ^6.2.1
+  # --- v3 online features (Supabase backend) ---
+  supabase_flutter: 2.18.3
   image_picker: ^1.2.0
   connectivity_plus: ^7.0.0
+  # --- v3 security: TLS CA pinning + encrypted session storage ---
+  http: ^1.2.0
+  flutter_secure_storage: ^9.2.4
 
 dev_dependencies:
   flutter_test:

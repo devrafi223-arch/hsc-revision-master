@@ -6,7 +6,7 @@ import 'data/syllabus.dart';
 import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 import 'services/auth_service.dart';
-import 'services/firebase_init.dart';
+import 'services/supabase_init.dart';
 import 'services/messaging_service.dart';
 import 'services/sync_service.dart';
 
@@ -53,11 +53,11 @@ CupertinoThemeData _cupertinoTheme({required bool dark}) {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Firebase + FCM setup. Both are fully guarded and never throw: while
-  // lib/firebase_options.dart still holds the placeholder config the app
-  // runs in LOCAL-ONLY mode (see lib/services/firebase_init.dart).
+  // Supabase + push setup. Both are fully guarded and never throw: while
+  // lib/supabase_config.dart still holds the placeholder values the app
+  // runs in LOCAL-ONLY mode (see lib/services/supabase_init.dart).
   try {
-    await FirebaseInit.initialize();
+    await SupabaseInit.initialize();
   } catch (_) {
     // Local-only mode.
   }
@@ -93,8 +93,8 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
       theme: _cupertinoTheme(dark: _dark),
       // Auth gate (v3): signed-out users see the auth screen, signed-in
       // users see the tracker. In local-only mode AuthService emits null
-      // (no account exists without Firebase), so the auth screen shows
-      // until Firebase is configured; the auth screen itself explains
+      // (no account exists without Supabase), so the auth screen shows
+      // until Supabase is configured; the auth screen itself explains
       // local-only mode.
       home: StreamBuilder<String?>(
         stream: AuthService.instance.authStateChanges,

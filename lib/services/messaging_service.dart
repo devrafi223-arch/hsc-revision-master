@@ -1,21 +1,26 @@
 import 'dart:async';
 
-import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import 'firebase_init.dart';
+import 'supabase_init.dart';
 
-/// Firebase Cloud Messaging setup + in-app milestone notifications.
+/// Push / reminders + in-app milestone notifications.
 ///
-/// [init] is fully guarded (try/catch, no-op without config) and never
-/// throws. [notifyMilestone] pushes the milestone name onto
-/// [milestoneNotifications], which the UI listens to and shows as a local
-/// in-app notification (banner/confetti — the UI agent owns the display).
+/// Supabase has NO FCM: there is no server push in this app. Push is a
+/// LOCAL-REMINDER STUB instead:
+///   * [notifyMilestone] pushes the milestone name onto
+///     [milestoneNotifications], which the UI listens to and shows as a
+///     local in-app notification (banner/confetti — the UI agent owns
+///     the display).
+///   * [scheduleDailyReminder] stores the chosen morning reminder time
+///     locally; [notifyDailyReminder] surfaces a revision reminder on
+///     [dailyReminders], which the UI shows in-app.
 ///
-/// TODO: sending an FCM push to OTHER devices (e.g. a daily motivation
-/// quote or a friend's milestone) needs a server — FCM topic/device sends
-/// cannot be done from the app itself without exposing the server key.
-/// That is a backend / Cloud Function job; this service deliberately does
-/// NOT fake a server send.
+/// TODO: real push to OTHER devices (a daily revision reminder, a daily
+/// motivation quote, or a friend's milestone) needs Supabase Edge Function
+/// + FCM server key for real push. A push cannot be sent from the app
+/// itself without exposing the server key, so this service deliberately
+/// does NOT fake a server send.
 class MessagingService {
   static final StreamController<String> _milestoneController =
       StreamController<String>.broadcast();
@@ -24,32 +29,59 @@ class MessagingService {
   static Stream<String> get milestoneNotifications =>
       _milestoneController.stream;
 
-  /// Requests notification permission and fetches the FCM token.
-  /// No-op (returns immediately) when Firebase is not configured.
+  static final StreamController<String> _reminderController =
+      StreamController<String>.broadcast();
+
+  /// In-app daily revision reminders (reminder text). The UI listens.
+  static Stream<String> get dailyReminders => _reminderController.stream;
+
+  /// SharedPreferences key for the locally stored reminder time.
+  static const String reminderTimeKey = 'daily-reminder-time-v1';
+
+  /// No-op setup. Never throws. There is no FCM token to fetch — see
+  /// the class doc: real push needs a server (Edge Function + FCM key).
   static Future<void> init() async {
-    if (!FirebaseInit.isOnlineMode) return;
-    try {
-      final messaging = FirebaseMessaging.instance;
-      await messaging.requestPermission();
-      // Token is fetched best-effort so the backend can target this device
-      // later; failure here must never break startup.
-      await messaging.getToken();
-      FirebaseMessaging.onMessage.listen((_) {
-        // Foreground FCM messages arrive here. The UI agent owns any
-        // foreground display; nothing is done automatically.
-      });
-    } catch (_) {
-      // FCM unavailable (no config, no Play services, web without a
-      // service worker, ...) — the app keeps working without pushes.
-    }
+    if (!SupabaseInit.isOnlineMode) return;
+    // Nothing to register: Supabase has no client push SDK.
   }
 
-  /// Announces a newly earned milestone inside the app. If FCM is
-  /// configured, a best-effort topic send to other devices is a TODO
-  /// (needs a server — see the class doc comment).
+  /// Announces a newly earned milestone inside the app.
   static Future<void> notifyMilestone(String milestoneName) async {
     if (!_milestoneController.isClosed) {
       _milestoneController.add(milestoneName);
+    }
+  }
+
+  /// Stores the daily revision reminder time (hour/minute) on this device.
+  /// This only records the preference — actually firing at that time needs
+  /// Supabase Edge Function + FCM server key for real push (see class
+  /// doc); until then the UI can call [notifyDailyReminder] itself, e.g.
+  /// when the app is opened in the morning.
+  static Future<void> scheduleDailyReminder({
+    required int hour,
+    required int minute,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      reminderTimeKey,
+      '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
+    );
+  }
+
+  /// Returns the stored daily reminder time as 'HH:MM', or null when the
+  /// user never set one.
+  static Future<String?> get dailyReminderTime async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(reminderTimeKey);
+  }
+
+  /// Surfaces a revision reminder inside the app (in-app only — not a
+  /// system push notification).
+  static Future<void> notifyDailyReminder([String? text]) async {
+    if (!_reminderController.isClosed) {
+      _reminderController.add(
+        text ?? 'Time for revision — knock out today\'s chapters!',
+      );
     }
   }
 }

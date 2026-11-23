@@ -1,50 +1,80 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:async';
+
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/app_user.dart';
-import 'firebase_init.dart';
+import 'supabase_init.dart';
 
-/// User profiles in Firestore collection `users` (doc id = uid).
+/// User profiles in the Supabase `users` table (row id = Auth uid).
 ///
-/// All Firestore calls are guarded: while [FirebaseInit.isOnlineMode] is
+/// All Supabase calls are guarded: while [SupabaseInit.isOnlineMode] is
 /// false, a local in-memory cache is used instead and methods never throw.
 class UserRepository {
   UserRepository._();
 
   static final UserRepository instance = UserRepository._();
 
-  CollectionReference<Map<String, dynamic>> get _users =>
-      FirebaseFirestore.instance.collection('users');
+  SupabaseClient get _db => SupabaseInit.client;
 
   final Map<String, AppUser> _localCache = {};
 
   Future<void> saveUser(AppUser u) async {
     _localCache[u.id] = u;
-    if (!FirebaseInit.isOnlineMode) return;
+    if (!SupabaseInit.isOnlineMode) return;
     try {
-      await _users.doc(u.id).set(u.toMap(), SetOptions(merge: true));
+      await _db.from('users').upsert({'id': u.id, ...u.toMap()});
     } catch (_) {
       // Offline/cache fallback: the local copy above is kept.
     }
   }
 
   Stream<AppUser?> userStream(String uid) {
-    if (!FirebaseInit.isOnlineMode) {
+    if (!SupabaseInit.isOnlineMode) {
       return Stream<AppUser?>.value(_localCache[uid]);
     }
-    return _users.doc(uid).snapshots().map((doc) {
-      final data = doc.data();
-      if (data == null) return null;
-      return AppUser.fromMap(doc.id, data);
-    });
+    final controller = StreamController<AppUser?>();
+    var closed = false;
+    Future<void> emit() async {
+      try {
+        final user = await getUser(uid);
+        if (!closed) controller.add(user);
+      } catch (_) {
+        // Keep the stream alive; the next Realtime event retries.
+      }
+    }
+    unawaited(emit());
+    final channel = _db
+        .channel('public:users:$uid')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'users',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'id',
+            value: uid,
+          ),
+          callback: (_) => unawaited(emit()),
+        )
+        .subscribe();
+    controller.onCancel = () async {
+      closed = true;
+      await channel.unsubscribe();
+      await controller.close();
+    };
+    return controller.stream;
   }
 
   Future<AppUser?> getUser(String uid) async {
-    if (!FirebaseInit.isOnlineMode) return _localCache[uid];
+    if (!SupabaseInit.isOnlineMode) return _localCache[uid];
     try {
-      final doc = await _users.doc(uid).get();
-      final data = doc.data();
-      if (data == null) return _localCache[uid];
-      final user = AppUser.fromMap(doc.id, data);
+      final row = await _db
+          .from('users')
+          .select()
+          .eq('id', uid)
+          .maybeSingle();
+      if (row == null) return _localCache[uid];
+      final user = AppUser.fromMap(uid, row);
       _localCache[uid] = user;
       return user;
     } catch (_) {
@@ -54,25 +84,27 @@ class UserRepository {
 
   /// Weekly top 10 by chapters finished.
   ///
-  /// TODO: the "weekly" filter is not implemented yet — Firestore needs a
-  /// dedicated weekly counter field (e.g. `chaptersDoneThisWeek` plus a
-  /// `weekStart` timestamp, reset by a scheduled job / Cloud Function).
+  /// TODO: the "weekly" filter is not implemented yet — Supabase needs a
+  /// dedicated weekly counter field (e.g. `chapters_done_this_week` plus
+  /// a `week_start` timestamp, reset by a scheduled job / Edge Function).
   /// Until that field exists this orders by the all-time
-  /// `totalChaptersDone` count.
+  /// `chapters_done` count.
   Future<List<AppUser>> leaderboardWeekly({int limit = 10}) async {
-    if (!FirebaseInit.isOnlineMode) {
+    if (!SupabaseInit.isOnlineMode) {
       final users = _localCache.values.toList()
         ..sort((a, b) => b.totalChaptersDone.compareTo(a.totalChaptersDone));
       return users.take(limit).toList();
     }
     try {
-      final snapshot = await _users
-          .orderBy('totalChaptersDone', descending: true)
-          .limit(limit)
-          .get();
-      return snapshot.docs
-          .map((doc) => AppUser.fromMap(doc.id, doc.data()))
-          .toList();
+      final rows = await _db
+          .from('users')
+          .select()
+          .order('chapters_done', ascending: false)
+          .limit(limit);
+      return rows.map((row) {
+        final map = (row as Map).cast<String, dynamic>();
+        return AppUser.fromMap(map['id'] as String? ?? '', map);
+      }).toList();
     } catch (_) {
       return [];
     }
@@ -96,11 +128,14 @@ class UserRepository {
         followingIds: [...me.followingIds, targetUid],
       );
     }
-    if (!FirebaseInit.isOnlineMode) return;
+    if (!SupabaseInit.isOnlineMode) return;
     try {
-      await _users.doc(uid).update({
-        'followingIds': FieldValue.arrayUnion([targetUid]),
-      });
+      final current = await getUser(uid);
+      final following = [...?current?.followingIds];
+      if (!following.contains(targetUid)) following.add(targetUid);
+      await _db.from('users').update({
+        'following_ids': following,
+      }).eq('id', uid);
     } catch (_) {
       // Kept in the local cache above; syncs on the next saveUser.
     }
@@ -111,25 +146,27 @@ class UserRepository {
     String? profileVisibility,
     String? photoVisibility,
   }) async {
-    if (!FirebaseInit.isOnlineMode) return;
+    if (!SupabaseInit.isOnlineMode) return;
     try {
       final updates = <String, dynamic>{};
       if (profileVisibility != null) {
-        updates['profileVisibility'] = profileVisibility;
+        updates['privacy'] = profileVisibility;
       }
       if (photoVisibility != null) {
-        updates['photoVisibility'] = photoVisibility;
+        updates['photo_privacy'] = photoVisibility;
       }
-      if (updates.isNotEmpty) await _users.doc(uid).update(updates);
+      if (updates.isNotEmpty) {
+        await _db.from('users').update(updates).eq('id', uid);
+      }
     } catch (_) {
       // Privacy update is best effort; the local cache keeps the old value.
     }
   }
 
   Future<void> updateCover(String uid, String coverUrl) async {
-    if (!FirebaseInit.isOnlineMode) return;
+    if (!SupabaseInit.isOnlineMode) return;
     try {
-      await _users.doc(uid).update({'coverUrl': coverUrl});
+      await _db.from('users').update({'cover_url': coverUrl}).eq('id', uid);
     } catch (_) {
       // Best effort.
     }

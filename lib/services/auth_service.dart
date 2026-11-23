@@ -1,47 +1,49 @@
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/app_user.dart';
 import 'admin_service.dart';
-import 'firebase_init.dart';
+import 'supabase_init.dart';
 import 'user_repository.dart';
 
-/// Email + password + Google sign-in, backed by Firebase Auth.
+/// Email + password + Google sign-in, backed by Supabase Auth.
 ///
 /// Every method throws
-/// `Exception('Online features need Firebase setup — replace
-/// lib/firebase_options.dart with your real project config.')`
-/// while [FirebaseInit.isOnlineMode] is false. There is no OTP system:
-/// registration is email + password only (plus Google Sign-In).
+/// `Exception('Online features need Supabase setup — replace
+/// lib/supabase_config.dart with your real project values.')`
+/// while [SupabaseInit.isOnlineMode] is false. There is no OTP system:
+/// registration is email + password only (plus Google Sign-In via
+/// Supabase Auth's built-in OAuth — no google_sign_in package).
 class AuthService {
   AuthService._();
 
   static final AuthService instance = AuthService._();
 
   static const String _onlineError =
-      'Online features need Firebase setup — replace '
-      'lib/firebase_options.dart with your real project config.';
+      'Online features need Supabase setup — replace '
+      'lib/supabase_config.dart with your real project values.';
+
+  SupabaseClient get _auth => SupabaseInit.client;
 
   /// Emits the signed-in uid, or null when signed out. In local-only mode
-  /// emits a single null (there is no account without Firebase).
+  /// emits a single null (there is no account without Supabase).
   Stream<String?> get authStateChanges {
-    if (!FirebaseInit.isOnlineMode) return Stream<String?>.value(null);
-    return FirebaseAuth.instance
-        .authStateChanges()
-        .map((user) => user?.uid);
+    if (!SupabaseInit.isOnlineMode) return Stream<String?>.value(null);
+    return _auth.auth.onAuthStateChange.map(
+      (data) => data.session?.user.id,
+    );
   }
 
-  String? get currentUid => FirebaseInit.isOnlineMode
-      ? FirebaseAuth.instance.currentUser?.uid
+  String? get currentUid => SupabaseInit.isOnlineMode
+      ? _auth.auth.currentUser?.id
       : null;
 
   bool get signedIn => currentUid != null;
 
-  /// False while Firebase is not configured (local-only mode).
-  bool get isAvailable => FirebaseInit.isOnlineMode;
+  /// False while Supabase is not configured (local-only mode).
+  bool get isAvailable => SupabaseInit.isOnlineMode;
 
   void _requireOnline() {
-    if (!FirebaseInit.isOnlineMode) throw Exception(_onlineError);
+    if (!SupabaseInit.isOnlineMode) throw Exception(_onlineError);
   }
 
   Future<void> registerWithEmail({
@@ -50,28 +52,27 @@ class AuthService {
     required String name,
   }) async {
     _requireOnline();
-    final credential =
-        await FirebaseAuth.instance.createUserWithEmailAndPassword(
+    final response = await _auth.auth.signUp(
       email: email,
       password: password,
+      data: {'display_name': name},
     );
-    final user = credential.user;
+    final user = response.user;
     if (user == null) throw Exception('Registration failed: no user.');
-    await user.updateDisplayName(name);
     // Local admin fallback: the first user ever registered on this device
-    // becomes the admin until a real isAdmin flag is set in Firestore.
+    // becomes the admin until a real isAdmin flag is set in Supabase.
     try {
-      await AdminService.recordFirstUser(user.uid);
+      await AdminService.recordFirstUser(user.id);
     } catch (_) {
       // Best effort only.
     }
-    // Best effort: create the profile doc so the community can show it.
+    // Best effort: create the profile row so the community can show it.
     try {
       await UserRepository.instance.saveUser(
-        AppUser(id: user.uid, name: name, email: email),
+        AppUser(id: user.id, name: name, email: email),
       );
     } catch (_) {
-      // Profile doc failure must not fail registration itself.
+      // Profile row failure must not fail registration itself.
     }
   }
 
@@ -80,7 +81,7 @@ class AuthService {
     required String password,
   }) async {
     _requireOnline();
-    await FirebaseAuth.instance.signInWithEmailAndPassword(
+    await _auth.auth.signInWithPassword(
       email: email,
       password: password,
     );
@@ -88,52 +89,53 @@ class AuthService {
 
   Future<void> signInWithGoogle() async {
     _requireOnline();
-    final googleUser = await GoogleSignIn().signIn();
-    if (googleUser == null) {
+    // Supabase Auth's built-in OAuth (no google_sign_in package): opens
+    // the browser for Google sign-in and returns to the app via deep link.
+    // Returns false when the flow is cancelled / cannot start.
+    final launched = await _auth.auth.signInWithOAuth(OAuthProvider.google);
+    if (!launched) {
       throw Exception('Google sign-in cancelled.');
     }
-    final googleAuth = await googleUser.authentication;
-    final credential = GoogleAuthProvider.credential(
-      accessToken: googleAuth.accessToken,
-      idToken: googleAuth.idToken,
-    );
-    final result =
-        await FirebaseAuth.instance.signInWithCredential(credential);
-    final user = result.user;
+    // The session arrives via onAuthStateChange after the redirect; if
+    // the user object is already present (e.g. web), create the profile
+    // row now. Otherwise the row is created on first profile load.
+    final user = _auth.auth.currentUser;
     if (user != null) {
       try {
         final existing =
-            await UserRepository.instance.getUser(user.uid);
+            await UserRepository.instance.getUser(user.id);
         if (existing == null) {
+          final meta = user.userMetadata ?? {};
           await UserRepository.instance.saveUser(
             AppUser(
-              id: user.uid,
-              name: user.displayName ?? googleUser.displayName ?? 'Student',
-              email: user.email ?? googleUser.email,
-              photoUrl: user.photoURL,
+              id: user.id,
+              name: (meta['display_name'] as String?) ??
+                  (meta['full_name'] as String?) ??
+                  (meta['name'] as String?) ??
+                  'Student',
+              email: user.email ?? '',
+              photoUrl: meta['avatar_url'] as String?,
             ),
           );
         }
       } catch (_) {
-        // Profile doc failure must not fail sign-in itself.
+        // Profile row failure must not fail sign-in itself.
       }
     }
   }
 
   Future<void> signOut() async {
-    if (!FirebaseInit.isOnlineMode) return;
-    try {
-      await GoogleSignIn().signOut();
-    } catch (_) {
-      // Google sign-out is best effort.
-    }
-    await FirebaseAuth.instance.signOut();
+    if (!SupabaseInit.isOnlineMode) return;
+    await _auth.auth.signOut();
   }
 
   Future<void> sendEmailVerification() async {
     _requireOnline();
-    final user = FirebaseAuth.instance.currentUser;
+    final user = _auth.auth.currentUser;
     if (user == null) throw Exception('No user is signed in.');
-    await user.sendEmailVerification();
+    final email = user.email;
+    if (email == null) throw Exception('No email on this account.');
+    // Re-sends the Supabase signup confirmation email.
+    await _auth.auth.resend(type: OtpType.signup, email: email);
   }
 }

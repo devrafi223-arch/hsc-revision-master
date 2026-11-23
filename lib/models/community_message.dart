@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 /// The kind of a community message.
 enum MessageType { text, photo, poll, voice }
 
@@ -63,7 +61,7 @@ class PollData {
 }
 
 /// One message in the universal community (or inside a group when
-/// [groupId] is set). Stored in Firestore collection `messages`.
+/// [groupId] is set). Stored in the Supabase `messages` table.
 ///
 /// When [isAnonymous] is true the UI shows "Anonymous" with no name or
 /// photo, but [authorId] is still stored, so moderation, reporting and
@@ -134,7 +132,7 @@ class CommunityMessage {
         'replyToText': replyToText,
         'type': type.name,
         // Stored as epoch millis so the same map is JSON-safe (offline
-        // queue) and Firestore-safe.
+        // queue) and parses back through fromMap.
         'timestamp': timestamp.millisecondsSinceEpoch,
         'poll': poll?.toMap(),
         'pinned': pinned,
@@ -146,12 +144,15 @@ class CommunityMessage {
         'isAnonymous': isAnonymous,
       };
 
+  /// Accepts both the app/offline-queue map shape ([toMap]: `text`,
+  /// `timestamp` as epoch millis, `type`, camelCase keys) and a raw
+  /// Supabase row (snake_case: `body`, `created_at` ISO string,
+  /// `author_id`, `photo_url`, `reply_to`, ...). When `type` is absent
+  /// (Supabase rows) it is derived from which media/poll field is set.
   factory CommunityMessage.fromMap(String id, Map<String, dynamic> m) {
-    final rawTs = m['timestamp'];
+    final rawTs = m['created_at'] ?? m['timestamp'];
     final DateTime timestamp;
-    if (rawTs is Timestamp) {
-      timestamp = rawTs.toDate();
-    } else if (rawTs is num) {
+    if (rawTs is num) {
       timestamp =
           DateTime.fromMillisecondsSinceEpoch(rawTs.toInt(), isUtc: true)
               .toLocal();
@@ -167,17 +168,34 @@ class CommunityMessage {
         reactions[entry.key.toString()] = (entry.value as num?)?.toInt() ?? 0;
       }
     }
-    final rawType = (m['type'] as String?) ?? 'text';
+    final hasPoll = m['poll'] is Map || m['poll_id'] != null;
+    final hasPhoto =
+        (m['photo_url'] as String?)?.isNotEmpty == true ||
+            (m['photoUrl'] as String?)?.isNotEmpty == true;
+    final hasVoice =
+        (m['voice_url'] as String?)?.isNotEmpty == true ||
+            (m['voiceUrl'] as String?)?.isNotEmpty == true;
+    final rawType = (m['type'] as String?) ??
+        (hasPoll
+            ? 'poll'
+            : hasPhoto
+                ? 'photo'
+                : hasVoice
+                    ? 'voice'
+                    : 'text');
     return CommunityMessage(
       id: id,
-      authorId: (m['authorId'] as String?) ?? '',
-      authorName: (m['authorName'] as String?) ?? '',
-      authorPhoto: m['authorPhoto'] as String?,
-      text: m['text'] as String?,
-      photoUrl: m['photoUrl'] as String?,
-      voiceUrl: m['voiceUrl'] as String?,
-      replyToId: m['replyToId'] as String?,
-      replyToText: m['replyToText'] as String?,
+      authorId: (m['author_id'] as String?) ?? (m['authorId'] as String?) ?? '',
+      authorName:
+          (m['author_name'] as String?) ?? (m['authorName'] as String?) ?? '',
+      authorPhoto:
+          (m['author_photo'] as String?) ?? (m['authorPhoto'] as String?),
+      text: (m['body'] as String?) ?? (m['text'] as String?),
+      photoUrl: (m['photo_url'] as String?) ?? (m['photoUrl'] as String?),
+      voiceUrl: (m['voice_url'] as String?) ?? (m['voiceUrl'] as String?),
+      replyToId: (m['reply_to'] as String?) ?? (m['replyToId'] as String?),
+      replyToText:
+          (m['reply_to_text'] as String?) ?? (m['replyToText'] as String?),
       type: MessageType.values.firstWhere(
         (t) => t.name == rawType,
         orElse: () => MessageType.text,
@@ -195,11 +213,16 @@ class CommunityMessage {
       bookmarkedBy: (m['bookmarkedBy'] as List?)
               ?.map((e) => e.toString())
               .toList() ??
+          (m['bookmarked_by'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
           [],
       flagged: m['flagged'] == true,
-      flagReason: m['flagReason'] as String?,
-      groupId: m['groupId'] as String?,
-      isAnonymous: m['isAnonymous'] == true,
+      flagReason:
+          (m['flag_reason'] as String?) ?? (m['flagReason'] as String?),
+      groupId: (m['group_id'] as String?) ?? (m['groupId'] as String?),
+      isAnonymous:
+          (m['is_anonymous'] == true) || (m['isAnonymous'] == true),
     );
   }
 }
