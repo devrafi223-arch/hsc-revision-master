@@ -2,7 +2,7 @@ import 'package:flutter/cupertino.dart';
 
 import '../main.dart';
 import '../services/auth_service.dart';
-import 'home_screen.dart';
+import '../services/supabase_init.dart';
 
 /// Email + password + Google sign-in, Cupertino only.
 ///
@@ -10,7 +10,15 @@ import 'home_screen.dart';
 /// [AuthService.registerWithEmail] (email + password + name). No email-code
 /// verification step.
 class AuthScreen extends StatelessWidget {
-  const AuthScreen({super.key});
+  const AuthScreen({super.key, this.onContinueOffline});
+
+  /// Called when the user taps "Continue offline" on the ROOT auth
+  /// gate. The app then shows the tracker from the top level — this
+  /// screen must never push a HomeScreen itself: pushing one from the
+  /// Profile tab's AuthScreen nested it inside the tab and doubled
+  /// the nav bar + header. Null when pushed from inside the app
+  /// (e.g. Profile tab), where "continue" just means "go back".
+  final VoidCallback? onContinueOffline;
 
   @override
   Widget build(BuildContext context) {
@@ -18,15 +26,17 @@ class AuthScreen extends StatelessWidget {
       navigationBar: const CupertinoNavigationBar(
         middle: Text('Welcome'),
       ),
-      child: const SafeArea(
-        child: _AuthForm(),
+      child: SafeArea(
+        child: _AuthForm(onContinueOffline: onContinueOffline),
       ),
     );
   }
 }
 
 class _AuthForm extends StatefulWidget {
-  const _AuthForm();
+  const _AuthForm({this.onContinueOffline});
+
+  final VoidCallback? onContinueOffline;
 
   @override
   State<_AuthForm> createState() => _AuthFormState();
@@ -48,9 +58,29 @@ class _AuthFormState extends State<_AuthForm> {
   }
 
   void _goHome() {
-    Navigator.of(context).pushReplacement(
-      CupertinoPageRoute(builder: (_) => const HomeScreen()),
-    );
+    if (widget.onContinueOffline != null) {
+      // Root auth gate: the app-level auth stream rebuilds to
+      // HomeScreen once signed in — nothing to push here.
+      return;
+    }
+    // Pushed from inside the app (e.g. Profile tab): just go back —
+    // the auth stream rebuilds the root to HomeScreen once signed in.
+    Navigator.of(context).pop();
+  }
+
+  void _continueOffline() {
+    if (widget.onContinueOffline != null) {
+      widget.onContinueOffline!();
+      return;
+    }
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _tryAgain() async {
+    setState(() => _busy = true);
+    await SupabaseInit.retry();
+    if (!mounted) return;
+    setState(() => _busy = false);
   }
 
   Future<void> _showError(String message) async {
@@ -147,14 +177,27 @@ class _AuthFormState extends State<_AuthForm> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Online features need Supabase setup — you can still use the tracker offline.',
+                  SupabaseInit.lastError == null
+                      ? 'Online features need Supabase setup — you can still use the tracker offline.'
+                      : 'Online features unavailable: ${SupabaseInit.lastError}',
                   style: base.copyWith(fontSize: 14, height: 1.45),
                 ),
                 const SizedBox(height: 12),
-                CupertinoButton.filled(
-                  borderRadius: BorderRadius.circular(14),
-                  onPressed: _goHome,
-                  child: const Text('Continue offline'),
+                Row(
+                  children: [
+                    CupertinoButton.filled(
+                      borderRadius: BorderRadius.circular(14),
+                      onPressed: _continueOffline,
+                      child: const Text('Continue offline'),
+                    ),
+                    if (SupabaseInit.lastError != null) ...[
+                      const SizedBox(width: 12),
+                      CupertinoButton(
+                        onPressed: _busy ? null : _tryAgain,
+                        child: const Text('Try again'),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),

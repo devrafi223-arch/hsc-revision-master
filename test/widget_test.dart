@@ -87,6 +87,61 @@ void main() {
     expect(tester.widget<CupertinoSwitch>(switchFinder).value, isTrue);
   });
 
+  testWidgets('Today target to-do: add, tick off, delete', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await enterApp(tester);
+
+    expect(find.text('Today’s target'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('todo-input')),
+      'Revise Physics Ch 3',
+    );
+    await tester.ensureVisible(find.byKey(const Key('todo-add')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('todo-add')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Revise Physics Ch 3'), findsOneWidget);
+    expect(find.text('0/1 done'), findsOneWidget);
+
+    await tester.ensureVisible(find.byIcon(CupertinoIcons.circle).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(CupertinoIcons.circle).first);
+    await tester.pumpAndSettle();
+    expect(find.text('1/1 done'), findsOneWidget);
+
+    await tester.ensureVisible(find.byIcon(CupertinoIcons.delete).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(CupertinoIcons.delete).first);
+    await tester.pumpAndSettle();
+    expect(find.text('Revise Physics Ch 3'), findsNothing);
+  });
+
+  testWidgets('Reset needs Confirm typed in Settings danger zone',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await enterApp(tester);
+
+    await tester.tap(find.byKey(const Key('settings-button')));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Reset all progress'),
+      200,
+    );
+    await tester.tap(find.text('Reset all progress'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reset all progress?'), findsOneWidget);
+    final resetButton = find.widgetWithText(CupertinoDialogAction, 'Reset');
+    expect(tester.widget<CupertinoDialogAction>(resetButton).onPressed,
+        isNull);
+
+    await tester.enterText(find.byType(CupertinoTextField), 'Confirm');
+    await tester.pump();
+    expect(tester.widget<CupertinoDialogAction>(resetButton).onPressed,
+        isNotNull);
+  });
+
   testWidgets('Cupertino tab bar switches between Today, All, Community and Profile', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await enterApp(tester);
@@ -94,9 +149,13 @@ void main() {
     expect(find.byType(CupertinoTabBar), findsOneWidget);
     // The Today tab is a long list now (target + plan cards sit above
     // Today's Focus), so scroll it into view before asserting.
+    // NOTE: the to-do input field owns its own Scrollable, so the
+    // scrollable must be named explicitly here (the page ListView's
+    // Scrollable is the first one in the tree).
     await tester.scrollUntilVisible(
       find.textContaining("Today's Focus"),
       200,
+      scrollable: find.byType(Scrollable).first,
     );
     expect(find.textContaining("Today's Focus"), findsOneWidget);
     await tester.tap(find.text('Community'));

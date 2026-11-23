@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'data/syllabus.dart';
 import 'screens/auth_screen.dart';
@@ -85,6 +86,28 @@ class HscRevisionApp extends StatefulWidget {
 class _HscRevisionAppState extends State<HscRevisionApp> {
   bool _dark = false;
 
+  /// True after the user taps "Continue offline" on the auth screen.
+  /// The tracker then opens with the REAL app-level theme wiring —
+  /// never a pushed copy of HomeScreen (pushing one nested it inside
+  /// the Profile tab and doubled the nav bar + header).
+  bool _offline = false;
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((prefs) {
+      if (!mounted) return;
+      setState(() => _dark = prefs.getBool('night-mode') ?? false);
+    });
+  }
+
+  Future<void> _toggleTheme() async {
+    final next = !_dark;
+    setState(() => _dark = next);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('night-mode', next);
+  }
+
   @override
   Widget build(BuildContext context) {
     return CupertinoApp(
@@ -99,13 +122,22 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
       home: StreamBuilder<String?>(
         stream: AuthService.instance.authStateChanges,
         builder: (context, snapshot) {
-          if (snapshot.data != null) {
+          final signedIn = snapshot.data != null;
+          if (signedIn && _offline) {
+            // Signed in now — the offline bypass is no longer needed.
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) setState(() => _offline = false);
+            });
+          }
+          if (signedIn || _offline) {
             return HomeScreen(
               dark: _dark,
-              onToggleTheme: () => setState(() => _dark = !_dark),
+              onToggleTheme: _toggleTheme,
             );
           }
-          return const AuthScreen();
+          return AuthScreen(
+            onContinueOffline: () => setState(() => _offline = true),
+          );
         },
       ),
     );

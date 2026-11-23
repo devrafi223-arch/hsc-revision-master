@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
@@ -76,15 +77,22 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _toastTimer;
 
   int _dailyTarget = 3;
+  // NOTE: _dailyTarget is still the default pace for "Today's plan"
+  // when no target date is set. The target CARD itself is now a manual
+  // to-do list (below) — the old +/- chapter stepper is gone.
   DateTime? _customTargetDate;
+
+  /// Today's target as a manual to-do list (Rafi: the target is set by
+  /// hand, as to-dos). Each entry: {'id', 'title', 'done'}. Stored in
+  /// SharedPreferences key 'today-todos-v1'; device-local for now
+  /// (online sync is a follow-up once the backend link is proven).
+  List<Map<String, dynamic>> _todos = [];
   final Set<String> _milestonesShown = {};
   bool _isAdmin = false;
 
-  /// Local theme fallback: when the app opened this screen from
-  /// AuthScreen's "Continue offline" there is no [HomeScreen.onToggleTheme]
-  /// (the app-level theme lives in HscRevisionApp, which the auth gate
-  /// bypassed). The night-mode switch then toggles this local flag
-  /// instead of being dead. When a real toggle exists it wins.
+  /// Local theme fallback, kept only as a safety net: main.dart now
+  /// always passes the real [onToggleTheme] (signed-in and offline),
+  /// so this flag is normally never used.
   bool _darkOverride = false;
   bool get _effectiveDark =>
       widget.onToggleTheme != null ? widget.dark : _darkOverride;
@@ -117,6 +125,18 @@ class _HomeScreenState extends State<HomeScreen> {
       _milestonesShown
         ..clear()
         ..addAll(prefs.getStringList('milestones-shown-v1') ?? []);
+      final rawTodos = prefs.getString('today-todos-v1');
+      if (rawTodos != null) {
+        try {
+          final decoded = jsonDecode(rawTodos) as List<dynamic>;
+          _todos = decoded
+              .whereType<Map<String, dynamic>>()
+              .where((m) => (m['title'] as String?)?.isNotEmpty == true)
+              .toList();
+        } catch (_) {
+          _todos = [];
+        }
+      }
     });
   }
 
@@ -212,58 +232,48 @@ class _HomeScreenState extends State<HomeScreen> {
     _showMessage('Target date saved.');
   }
 
-  Future<void> _changeDailyTarget(int delta) async {
-    final next = (_dailyTarget + delta).clamp(1, 10);
+  Future<void> _saveTodos() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('daily-target', next);
-    setState(() => _dailyTarget = next);
+    await prefs.setString('today-todos-v1', jsonEncode(_todos));
   }
 
+  Future<void> _addTodo(String title) async {
+    final text = title.trim();
+    if (text.isEmpty) return;
+    setState(() {
+      _todos.add({
+        'id': DateTime.now().microsecondsSinceEpoch.toString(),
+        'title': text,
+        'done': false,
+      });
+    });
+    await _saveTodos();
+  }
+
+  Future<void> _toggleTodo(String id) async {
+    setState(() {
+      final index = _todos.indexWhere((t) => t['id'] == id);
+      if (index != -1) {
+        _todos[index] = {
+          ..._todos[index],
+          'done': !(_todos[index]['done'] as bool? ?? false),
+        };
+      }
+    });
+    await _saveTodos();
+  }
+
+  Future<void> _removeTodo(String id) async {
+    setState(() => _todos.removeWhere((t) => t['id'] == id));
+    await _saveTodos();
+  }
+
+  /// Clears every tick. No dialog here — the only entry point is
+  /// Settings → Danger zone, which gates it behind typing "Confirm".
   Future<void> _resetAll() async {
-    final ok = await showCupertinoDialog<bool>(
-      context: context,
-      builder: (context) => CupertinoAlertDialog(
-        title: const Text('Reset all progress?'),
-        content: const Text('Every tick will be cleared. This cannot be undone.'),
-        actions: [
-          CupertinoDialogAction(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          CupertinoDialogAction(
-            isDestructiveAction: true,
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Reset'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
     setState(() => _store.checks.clear());
     await _store.save();
     _showMessage('All progress reset.');
-  }
-
-  void _showMoreMenu() {
-    showCupertinoModalPopup<void>(
-      context: context,
-      builder: (context) => CupertinoActionSheet(
-        actions: [
-          CupertinoActionSheetAction(
-            isDestructiveAction: true,
-            onPressed: () {
-              Navigator.of(context).pop();
-              _resetAll();
-            },
-            child: const Text('Reset all progress'),
-          ),
-        ],
-        cancelButton: CupertinoActionSheetAction(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-      ),
-    );
   }
 
   void _openSettings() {
@@ -272,6 +282,7 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_) => SettingsScreen(
           dark: _effectiveDark,
           onToggleTheme: widget.onToggleTheme,
+          onResetAll: _resetAll,
         ),
       ),
     );
@@ -364,13 +375,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final weakest = _store.weakestSubject(allChapterRefs);
     final today = DateTime.now();
 
-    // Per-day target: X = chapters fully completed (6/6) in total.
-    // NOTE: TrackerStore records no completion dates, so there is no
-    // honest "completed today" count — X is total finished chapters,
-    // labelled "completed so far" in the card below.
-    final completedChapters = allChapterRefs
-        .where((r) => _store.doneForChapter(r.chapter.id) == 6)
-        .length;
     final remainingRefs = allChapterRefs
         .where((r) => _store.doneForChapter(r.chapter.id) < 6)
         .toList();
@@ -417,22 +421,11 @@ class _HomeScreenState extends State<HomeScreen> {
     return CupertinoPageScaffold(
       navigationBar: CupertinoNavigationBar(
         middle: const Text('HSC Revision Master'),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CupertinoButton(
-              key: const Key('settings-button'),
-              padding: EdgeInsets.zero,
-              onPressed: _openSettings,
-              child: const Icon(CupertinoIcons.settings),
-            ),
-            CupertinoButton(
-              key: const Key('more-menu'),
-              padding: EdgeInsets.zero,
-              onPressed: _showMoreMenu,
-              child: const Icon(CupertinoIcons.ellipsis),
-            ),
-          ],
+        trailing: CupertinoButton(
+          key: const Key('settings-button'),
+          padding: EdgeInsets.zero,
+          onPressed: _openSettings,
+          child: const Icon(CupertinoIcons.settings),
         ),
       ),
       child: SafeArea(
@@ -528,9 +521,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                     weakestPct: _subjectPct(weakest),
                                     dark: _effectiveDark,
                                     onToggleTheme: _handleToggleTheme,
-                                    dailyTarget: _dailyTarget,
-                                    onDailyTargetChanged: _changeDailyTarget,
-                                    completedChapters: completedChapters,
+                                    todos: _todos,
+                                    onAddTodo: _addTodo,
+                                    onToggleTodo: _toggleTodo,
+                                    onRemoveTodo: _removeTodo,
                                     customTargetDate: _customTargetDate,
                                     daysLeft: daysLeft,
                                     perDay: perDay,
@@ -912,6 +906,135 @@ class _ProgressHeader extends StatelessWidget {
   }
 }
 
+/// Today's target as a manual to-do list: the user types their own
+/// targets and ticks them off. Shows "x/y done".
+class _TodayTargetCard extends StatefulWidget {
+  const _TodayTargetCard({
+    required this.todos,
+    required this.onAddTodo,
+    required this.onToggleTodo,
+    required this.onRemoveTodo,
+  });
+
+  final List<Map<String, dynamic>> todos;
+  final ValueChanged<String> onAddTodo;
+  final ValueChanged<String> onToggleTodo;
+  final ValueChanged<String> onRemoveTodo;
+
+  @override
+  State<_TodayTargetCard> createState() => _TodayTargetCardState();
+}
+
+class _TodayTargetCardState extends State<_TodayTargetCard> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    widget.onAddTodo(text);
+    _controller.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark =
+        CupertinoTheme.of(context).brightness == Brightness.dark;
+    final base = CupertinoTheme.of(context).textTheme.textStyle;
+    final muted = isDark ? JimColors.darkMuted : JimColors.muted;
+    final doneCount =
+        widget.todos.where((t) => t['done'] as bool? ?? false).length;
+    return _JimCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Today’s target',
+            style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            widget.todos.isEmpty
+                ? 'Add what you want to finish today, then tick it off.'
+                : '$doneCount/${widget.todos.length} done',
+            style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
+          ),
+          const SizedBox(height: 12),
+          ...widget.todos.map((todo) {
+            final id = todo['id'] as String? ?? '';
+            final title = todo['title'] as String? ?? '';
+            final done = todo['done'] as bool? ?? false;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: () => widget.onToggleTodo(id),
+                    child: Icon(
+                      done
+                          ? CupertinoIcons.checkmark_circle_fill
+                          : CupertinoIcons.circle,
+                      color: done ? JimColors.rose : muted,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: base.copyWith(
+                        fontSize: 15,
+                        height: 1.45,
+                        decoration:
+                            done ? TextDecoration.lineThrough : null,
+                        color: done ? muted : null,
+                      ),
+                    ),
+                  ),
+                  CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: () => widget.onRemoveTodo(id),
+                    child: const Icon(
+                      CupertinoIcons.delete,
+                      size: 18,
+                      color: CupertinoColors.systemRed,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+          Row(
+            children: [
+              Expanded(
+                child: CupertinoTextField(
+                  key: const Key('todo-input'),
+                  controller: _controller,
+                  placeholder: 'Add a target for today…',
+                  onSubmitted: (_) => _submit(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              CupertinoButton.filled(
+                key: const Key('todo-add'),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                borderRadius: BorderRadius.circular(14),
+                onPressed: _submit,
+                child: const Text('Add'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _TodayTab extends StatelessWidget {
   const _TodayTab({
     required this.store,
@@ -921,9 +1044,10 @@ class _TodayTab extends StatelessWidget {
     required this.weakestPct,
     required this.dark,
     required this.onToggleTheme,
-    required this.dailyTarget,
-    required this.onDailyTargetChanged,
-    required this.completedChapters,
+    required this.todos,
+    required this.onAddTodo,
+    required this.onToggleTodo,
+    required this.onRemoveTodo,
     required this.customTargetDate,
     required this.daysLeft,
     required this.perDay,
@@ -944,9 +1068,10 @@ class _TodayTab extends StatelessWidget {
   final String weakestName;
   final bool dark;
   final VoidCallback onToggleTheme;
-  final int dailyTarget;
-  final ValueChanged<int> onDailyTargetChanged;
-  final int completedChapters;
+  final List<Map<String, dynamic>> todos;
+  final ValueChanged<String> onAddTodo;
+  final ValueChanged<String> onToggleTodo;
+  final ValueChanged<String> onRemoveTodo;
   final DateTime? customTargetDate;
   final int? daysLeft;
   final int perDay;
@@ -978,49 +1103,11 @@ class _TodayTab extends StatelessWidget {
           dark: dark,
           onToggleTheme: onToggleTheme,
         ),
-        _JimCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Today’s target',
-                style: base.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      // X is total finished chapters, not today's count:
-                      // the tracker records no completion dates.
-                      'Today: $completedChapters/$dailyTarget chapters',
-                      style: base.copyWith(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  CupertinoButton(
-                    key: const Key('daily-target-minus'),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    onPressed: () => onDailyTargetChanged(-1),
-                    child: const Icon(CupertinoIcons.minus_circle),
-                  ),
-                  CupertinoButton(
-                    key: const Key('daily-target-plus'),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    onPressed: () => onDailyTargetChanged(1),
-                    child: const Icon(CupertinoIcons.plus_circle),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'completed so far — set how many chapters to finish each day with + / −.',
-                style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
-              ),
-            ],
-          ),
+        _TodayTargetCard(
+          todos: todos,
+          onAddTodo: onAddTodo,
+          onToggleTodo: onToggleTodo,
+          onRemoveTodo: onRemoveTodo,
         ),
         _JimCard(
           child: Column(

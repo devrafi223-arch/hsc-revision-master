@@ -22,6 +22,10 @@ class SupabaseInit {
   /// True only when Supabase was initialised with a real project config.
   static bool isOnlineMode = false;
 
+  /// The last init failure, if any — shown on the auth screen so a
+  /// failed online start is diagnosable instead of silent offline.
+  static String? lastError;
+
   /// Same as [isOnlineMode]: true only when online features can run.
   static bool get isOnlineCapable => isOnlineMode;
 
@@ -36,9 +40,14 @@ class SupabaseInit {
 
   /// Initialises Supabase. Never throws and never rethrows.
   /// Returns true when online mode is available, false otherwise.
+  /// Re-runs the init attempt (e.g. from the auth screen's Try again
+  /// button). Safe: Supabase.initialize skips when already initialised.
+  static Future<bool> retry() => initialize();
+
   static Future<bool> initialize() async {
     // Placeholder config → stay in local-only mode, don't even try.
     if (!isConfigured) {
+      lastError = 'Supabase URL/key not configured in the app.';
       isOnlineMode = false;
       return false;
     }
@@ -62,9 +71,15 @@ class SupabaseInit {
         ),
       );
       isOnlineMode = true;
+      lastError = null;
       return true;
-    } catch (_) {
+    } catch (e) {
       // No network, bad config, unsupported platform — local-only mode.
+      // Keep the reason so the auth screen can show it (and offer retry)
+      // instead of failing silently.
+      final text = e.toString();
+      lastError =
+          text.length > 300 ? '${text.substring(0, 300)}…' : text;
       isOnlineMode = false;
       return false;
     }

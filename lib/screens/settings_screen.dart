@@ -19,10 +19,15 @@ import '../main.dart';
 /// passed, the toggle is hidden and the Today tab's switch stays the
 /// way to change the theme.
 class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key, this.dark, this.onToggleTheme});
+  const SettingsScreen(
+      {super.key, this.dark, this.onToggleTheme, this.onResetAll});
 
   final bool? dark;
   final VoidCallback? onToggleTheme;
+
+  /// Clears all tracker progress. Shown under Danger zone, gated
+  /// behind typing "Confirm". Null hides the section.
+  final Future<void> Function()? onResetAll;
 
   /// Font scale for the chosen size: Small 0.9, Medium 1.0, Large 1.15.
   /// Updated whenever the user picks a size here.
@@ -44,6 +49,7 @@ class SettingsScreen extends StatelessWidget {
         child: _SettingsBody(
           dark: dark,
           onToggleTheme: onToggleTheme,
+          onResetAll: onResetAll,
         ),
       ),
     );
@@ -51,10 +57,12 @@ class SettingsScreen extends StatelessWidget {
 }
 
 class _SettingsBody extends StatefulWidget {
-  const _SettingsBody({required this.dark, required this.onToggleTheme});
+  const _SettingsBody(
+      {required this.dark, required this.onToggleTheme, this.onResetAll});
 
   final bool? dark;
   final VoidCallback? onToggleTheme;
+  final Future<void> Function()? onResetAll;
 
   @override
   State<_SettingsBody> createState() => _SettingsBodyState();
@@ -97,6 +105,52 @@ class _SettingsBodyState extends State<_SettingsBody> {
   Future<void> _saveString(String key, String value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(key, value);
+  }
+
+  /// Danger zone: reset needs the word "Confirm" typed in — a stray
+  /// tap can never wipe progress.
+  Future<void> _confirmReset() async {
+    final controller = TextEditingController();
+    var typed = '';
+    final confirmed = await showCupertinoDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => CupertinoAlertDialog(
+          title: const Text('Reset all progress?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                  'Every tick will be cleared. This cannot be undone.'),
+              const SizedBox(height: 12),
+              CupertinoTextField(
+                controller: controller,
+                placeholder: 'Type Confirm',
+                onChanged: (value) => setDialogState(() => typed = value),
+              ),
+            ],
+          ),
+          actions: [
+            CupertinoDialogAction(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            CupertinoDialogAction(
+              isDestructiveAction: true,
+              onPressed: typed == 'Confirm'
+                  ? () => Navigator.of(context).pop(true)
+                  : null,
+              child: const Text('Reset'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    if (confirmed != true || widget.onResetAll == null) return;
+    await widget.onResetAll!();
+    if (!mounted) return;
+    Navigator.of(context).pop(); // back to the Today tab to see the toast
   }
 
   Widget _sectionTitle(BuildContext context, String title) {
@@ -283,6 +337,57 @@ class _SettingsBodyState extends State<_SettingsBody> {
               style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
             ),
           ),
+        if (widget.onResetAll != null) ...[
+          _sectionTitle(context, 'Danger zone'),
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 24),
+            decoration: BoxDecoration(
+              color: isDark ? JimColors.darkSurface : JimColors.card,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: CupertinoColors.systemRed.withValues(alpha: 0.4),
+              ),
+            ),
+            child: CupertinoButton(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              onPressed: _confirmReset,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Reset all progress',
+                          style: base.copyWith(
+                            fontSize: 15,
+                            color: CupertinoColors.systemRed,
+                            height: 1.45,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Clears every tick. Cannot be undone — type Confirm to proceed.',
+                          style: base.copyWith(
+                            fontSize: 13,
+                            color: muted,
+                            height: 1.45,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(
+                    CupertinoIcons.chevron_right,
+                    size: 18,
+                    color: CupertinoColors.systemRed,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
