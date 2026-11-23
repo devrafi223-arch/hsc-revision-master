@@ -21,6 +21,14 @@ class AuthService {
 
   static final AuthService instance = AuthService._();
 
+  /// True while a password-recovery session is awaiting a new
+  /// password. Set by the passwordRecovery auth event (mail-link
+  /// flow) and by [verifyRecoveryCode] (code flow); cleared when the
+  /// new password is saved or the reset screen is dismissed. The app
+  /// root shows the reset screen while this is true.
+  static final ValueNotifier<bool> recoveryPending =
+      ValueNotifier<bool>(false);
+
   /// The real reason online is unavailable: the init failure when
   /// there is one, otherwise the missing-config hint.
   static String get _onlineError {
@@ -174,18 +182,55 @@ class AuthService {
     await _auth.auth.resend(type: OtpType.signup, email: email);
   }
 
-  /// Sends the password-reset email. The link in the mail returns to
-  /// the app via the same deep link as email confirmation (mobile) or
-  /// the Site URL (web); opening it emits
-  /// [AuthChangeEvent.passwordRecovery] and the app shows the
-  /// set-new-password screen. The deep link must be listed in the
-  /// Supabase dashboard (Auth -> URL Configuration -> Redirect URLs).
+  /// Sends the password-reset email. The mail carries a 6-digit code
+  /// (the dashboard template must include `{{ .Token }}`) AND the
+  /// link as a fallback: on a phone the link opens the app and emits
+  /// [AuthChangeEvent.passwordRecovery]; the code path verifies with
+  /// [verifyRecoveryCode] instead. The deep link must be listed in
+  /// the Supabase dashboard (Auth -> URL Configuration -> Redirect
+  /// URLs).
   Future<void> sendPasswordResetEmail({required String email}) async {
     _requireOnline();
     await _auth.auth.resetPasswordForEmail(
       email,
       redirectTo: kIsWeb ? null : _authRedirect,
     );
+  }
+
+  /// Verifies the 6-digit signup code from the confirmation mail
+  /// (the dashboard template must include `{{ .Token }}`). On success
+  /// the session is set and the user is signed in.
+  Future<void> verifySignupCode({
+    required String email,
+    required String code,
+  }) async {
+    _requireOnline();
+    await _auth.auth.verifyOTP(
+      email: email,
+      token: code,
+      type: OtpType.signup,
+    );
+  }
+
+  /// Re-sends the signup confirmation mail (new code).
+  Future<void> resendSignupCode({required String email}) async {
+    _requireOnline();
+    await _auth.auth.resend(type: OtpType.signup, email: email);
+  }
+
+  /// Verifies the 6-digit recovery code from the reset mail and opens
+  /// the set-new-password screen (via [recoveryPending]).
+  Future<void> verifyRecoveryCode({
+    required String email,
+    required String code,
+  }) async {
+    _requireOnline();
+    await _auth.auth.verifyOTP(
+      email: email,
+      token: code,
+      type: OtpType.recovery,
+    );
+    recoveryPending.value = true;
   }
 
   /// Sets the new password for the recovery session (after the user

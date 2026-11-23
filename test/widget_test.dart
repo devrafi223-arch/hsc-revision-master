@@ -6,6 +6,7 @@ import 'package:hsc_revision_master/data/syllabus.dart';
 import 'package:hsc_revision_master/main.dart';
 import 'package:hsc_revision_master/screens/auth_screen.dart';
 import 'package:hsc_revision_master/screens/home_screen.dart';
+import 'package:hsc_revision_master/screens/otp_screen.dart';
 import 'package:hsc_revision_master/screens/reset_password_screen.dart';
 import 'package:hsc_revision_master/widgets/pomodoro_timer.dart';
 
@@ -288,6 +289,49 @@ void main() {
     await tester.tap(find.text('Save new password'));
     await tester.pumpAndSettle();
     expect(find.text('Passwords do not match'), findsOneWidget);
+  });
+
+  testWidgets('OTP screen rejects a short code without calling Supabase',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jimTheme(dark: false),
+        home: const OtpScreen(
+          email: 'student@example.com',
+          purpose: OtpPurpose.signup,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, '6-digit code'),
+      '123',
+    );
+    await tester.tap(find.text('Verify code'));
+    await tester.pumpAndSettle();
+    expect(find.text('Enter the 6-digit code from your email.'),
+        findsOneWidget);
+  });
+
+  testWidgets('OTP screen sends a 6-digit code (offline: shows error)',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jimTheme(dark: false),
+        home: const OtpScreen(
+          email: 'student@example.com',
+          purpose: OtpPurpose.recovery,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, '6-digit code'),
+      '123456',
+    );
+    await tester.tap(find.text('Verify code'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Online features'), findsOneWidget);
   });
 
   testWidgets('Reset password screen sends matching passwords (offline: error)',

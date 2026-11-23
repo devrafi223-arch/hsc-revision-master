@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../services/auth_service.dart';
 import '../services/supabase_init.dart';
+import 'otp_screen.dart';
 
 /// Email + password + Google sign-in, Material only.
 ///
@@ -208,15 +209,17 @@ class _AuthFormState extends State<_AuthForm> {
           _goHome();
           return;
         }
-        // Email confirmation is required, so there is no session yet
-        // and the auth stream will NOT rebuild: say so clearly and
-        // switch to the Login tab. (Before this fix the button just
-        // stayed stuck on "Please wait…" with no message at all.)
-        setState(() => _isRegister = false);
-        await _showMessage(
-          title: 'Account created!',
-          message: 'Check your email for the confirmation link, '
-              'then log in here.',
+        // Confirmation needs the 6-digit code from the mail: open the
+        // code screen. No mail link to click — links show a blank page
+        // on a PC browser and cannot open the Windows app.
+        if (!mounted) return;
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (context) => OtpScreen(
+              email: email,
+              purpose: OtpPurpose.signup,
+            ),
+          ),
         );
       } else {
         await AuthService.instance.loginWithEmail(
@@ -238,10 +241,18 @@ class _AuthFormState extends State<_AuthForm> {
     await showDialog<void>(
       context: context,
       builder: (context) => _ForgotPasswordDialog(
-        onSent: () => _showMessage(
-          title: 'Reset link sent',
-          message: 'Check your email for the password reset link.',
-        ),
+        onSent: () {
+          // The reset mail carries a 6-digit code: open the code
+          // screen instead of asking the user to click a link.
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (context) => OtpScreen(
+                email: _emailController.text.trim(),
+                purpose: OtpPurpose.recovery,
+              ),
+            ),
+          );
+        },
       ),
     );
   }

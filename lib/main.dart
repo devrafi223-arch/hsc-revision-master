@@ -157,10 +157,6 @@ class HscRevisionApp extends StatefulWidget {
 class _HscRevisionAppState extends State<HscRevisionApp> {
   bool _dark = false;
 
-  /// True while a password-recovery link is being handled: the reset
-  /// link creates a valid session, so without this flag the tracker
-  /// would show instead of the set-new-password screen.
-  bool _recovering = false;
   StreamSubscription<bool>? _recoverySub;
 
   @override
@@ -170,14 +166,23 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
       if (!mounted) return;
       setState(() => _dark = prefs.getBool('night-mode') ?? false);
     });
+    // Recovery state lives in AuthService.recoveryPending (set by the
+    // passwordRecovery auth event for the mail-link flow, and by
+    // verifyRecoveryCode for the code flow). Rebuild when it changes.
+    AuthService.recoveryPending.addListener(_onRecoveryChanged);
     _recoverySub =
         AuthService.instance.passwordRecoveryChanges.listen((recovering) {
-      if (mounted && recovering) setState(() => _recovering = true);
+      if (recovering) AuthService.recoveryPending.value = true;
     });
+  }
+
+  void _onRecoveryChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    AuthService.recoveryPending.removeListener(_onRecoveryChanged);
     _recoverySub?.cancel();
     super.dispose();
   }
@@ -206,9 +211,9 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
           // No offline bypass (Rafi): login is mandatory. Offline is
           // only shown AFTER login, when the device loses internet
           // (the "Offline — will sync" pill on the Today tab).
-          if (_recovering) {
+          if (AuthService.recoveryPending.value) {
             return ResetPasswordScreen(
-              onDone: () => setState(() => _recovering = false),
+              onDone: () => AuthService.recoveryPending.value = false,
             );
           }
           if (snapshot.data != null) {
