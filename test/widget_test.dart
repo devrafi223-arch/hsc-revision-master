@@ -4,7 +4,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:hsc_revision_master/data/syllabus.dart';
 import 'package:hsc_revision_master/main.dart';
+import 'package:hsc_revision_master/screens/auth_screen.dart';
 import 'package:hsc_revision_master/screens/home_screen.dart';
+import 'package:hsc_revision_master/screens/reset_password_screen.dart';
 import 'package:hsc_revision_master/widgets/pomodoro_timer.dart';
 
 /// Test harness mirroring HscRevisionApp's wiring: HomeScreen with a
@@ -224,5 +226,89 @@ void main() {
     await tester.tap(find.byKey(const Key('pomodoro-reset')));
     await tester.pump();
     expect(find.text('00:03'), findsOneWidget);
+  });
+
+  testWidgets('Forgot password dialog opens and sends (offline: shows error)',
+      (tester) async {
+    // The auth gate has no offline bypass: in tests Supabase is not
+    // initialised, so sending shows the offline error inside the
+    // dialog instead of a success message.
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jimTheme(dark: false),
+        home: const AuthScreen(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // The form is a lazy ListView and the button starts below the
+    // fold, so scroll it into view first (the page ListView's
+    // Scrollable is the first one in the tree — the text fields own
+    // the others).
+    await tester.scrollUntilVisible(
+      find.text('Forgot password?'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Forgot password?'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reset password'), findsOneWidget);
+    // Scope to the dialog: the login form behind it has an 'Email'
+    // field too.
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.widgetWithText(TextField, 'Email'),
+      ),
+      'student@example.com',
+    );
+    await tester.tap(find.text('Send reset link'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Online features'), findsOneWidget);
+  });
+
+  testWidgets('Reset password screen rejects mismatched passwords',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jimTheme(dark: false),
+        home: ResetPasswordScreen(onDone: () {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'New password'),
+      'newpass123',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Confirm new password'),
+      'different456',
+    );
+    await tester.tap(find.text('Save new password'));
+    await tester.pumpAndSettle();
+    expect(find.text('Passwords do not match'), findsOneWidget);
+  });
+
+  testWidgets('Reset password screen sends matching passwords (offline: error)',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: jimTheme(dark: false),
+        home: ResetPasswordScreen(onDone: () {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'New password'),
+      'newpass123',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Confirm new password'),
+      'newpass123',
+    );
+    await tester.tap(find.text('Save new password'));
+    await tester.pumpAndSettle();
+    expect(find.text('Something went wrong'), findsOneWidget);
   });
 }

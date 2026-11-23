@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'data/syllabus.dart';
 import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/reset_password_screen.dart';
 import 'services/auth_service.dart';
 import 'services/supabase_init.dart';
 import 'services/messaging_service.dart';
@@ -156,6 +157,12 @@ class HscRevisionApp extends StatefulWidget {
 class _HscRevisionAppState extends State<HscRevisionApp> {
   bool _dark = false;
 
+  /// True while a password-recovery link is being handled: the reset
+  /// link creates a valid session, so without this flag the tracker
+  /// would show instead of the set-new-password screen.
+  bool _recovering = false;
+  StreamSubscription<bool>? _recoverySub;
+
   @override
   void initState() {
     super.initState();
@@ -163,6 +170,16 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
       if (!mounted) return;
       setState(() => _dark = prefs.getBool('night-mode') ?? false);
     });
+    _recoverySub =
+        AuthService.instance.passwordRecoveryChanges.listen((recovering) {
+      if (mounted && recovering) setState(() => _recovering = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _recoverySub?.cancel();
+    super.dispose();
   }
 
   Future<void> _toggleTheme() async {
@@ -189,6 +206,11 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
           // No offline bypass (Rafi): login is mandatory. Offline is
           // only shown AFTER login, when the device loses internet
           // (the "Offline — will sync" pill on the Today tab).
+          if (_recovering) {
+            return ResetPasswordScreen(
+              onDone: () => setState(() => _recovering = false),
+            );
+          }
           if (snapshot.data != null) {
             return HomeScreen(
               dark: _dark,

@@ -25,6 +25,94 @@ class AuthScreen extends StatelessWidget {
   }
 }
 
+/// Forgot-password dialog: asks for the account email and sends the
+/// Supabase reset link. Errors stay inside the dialog; on success it
+/// closes and the parent shows the "check your email" message.
+class _ForgotPasswordDialog extends StatefulWidget {
+  const _ForgotPasswordDialog({required this.onSent});
+
+  final VoidCallback onSent;
+
+  @override
+  State<_ForgotPasswordDialog> createState() => _ForgotPasswordDialogState();
+}
+
+class _ForgotPasswordDialogState extends State<_ForgotPasswordDialog> {
+  bool _busy = false;
+  String? _error;
+  final TextEditingController _emailController = TextEditingController();
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty || !email.contains('@')) {
+      setState(() => _error = 'Please enter a valid email address.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await AuthService.instance.sendPasswordResetEmail(email: email);
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      widget.onSent();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return AlertDialog(
+      title: const Text('Reset password'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Enter your account email and we will send you a reset link.',
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _emailController,
+            keyboardType: TextInputType.emailAddress,
+            decoration: jimFieldDecoration(dark: isDark, hint: 'Email'),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _error!,
+              style: const TextStyle(color: Colors.red, fontSize: 13),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _send,
+          child: Text(_busy ? 'Please wait…' : 'Send reset link'),
+        ),
+      ],
+    );
+  }
+}
+
 class _AuthForm extends StatefulWidget {
   const _AuthForm();
 
@@ -64,12 +152,15 @@ class _AuthFormState extends State<_AuthForm> {
     setState(() => _busy = false);
   }
 
-  Future<void> _showError(String message) async {
+  Future<void> _showMessage({
+    required String title,
+    required String message,
+  }) async {
     if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Something went wrong'),
+        title: Text(title),
         content: Text(message),
         actions: [
           TextButton(
@@ -79,6 +170,10 @@ class _AuthFormState extends State<_AuthForm> {
         ],
       ),
     );
+  }
+
+  Future<void> _showError(String message) async {
+    await _showMessage(title: 'Something went wrong', message: message);
   }
 
   Future<void> _submit() async {
@@ -105,19 +200,50 @@ class _AuthFormState extends State<_AuthForm> {
           password: password,
           name: name,
         );
+        if (!mounted) return;
+        setState(() => _busy = false);
+        if (AuthService.instance.signedIn) {
+          // Email auto-confirmed (or already confirmed): session
+          // exists, go straight in.
+          _goHome();
+          return;
+        }
+        // Email confirmation is required, so there is no session yet
+        // and the auth stream will NOT rebuild: say so clearly and
+        // switch to the Login tab. (Before this fix the button just
+        // stayed stuck on "Please wait…" with no message at all.)
+        setState(() => _isRegister = false);
+        await _showMessage(
+          title: 'Account created!',
+          message: 'Check your email for the confirmation link, '
+              'then log in here.',
+        );
       } else {
         await AuthService.instance.loginWithEmail(
           email: email,
           password: password,
         );
+        if (!mounted) return;
+        setState(() => _busy = false);
+        _goHome();
       }
-      if (!mounted) return;
-      _goHome();
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
       await _showError(e.toString());
     }
+  }
+
+  Future<void> _forgotPassword() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _ForgotPasswordDialog(
+        onSent: () => _showMessage(
+          title: 'Reset link sent',
+          message: 'Check your email for the password reset link.',
+        ),
+      ),
+    );
   }
 
   Future<void> _signInWithGoogle() async {
@@ -264,6 +390,16 @@ class _AuthFormState extends State<_AuthForm> {
             ),
           ),
         ),
+        if (!_isRegister) ...[
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: _busy ? null : _forgotPassword,
+              child: const Text('Forgot password?'),
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
         Row(
           children: [

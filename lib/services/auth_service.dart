@@ -59,6 +59,17 @@ class AuthService {
 
   bool get signedIn => currentUid != null;
 
+  /// Emits true when a password-recovery link was opened: Supabase
+  /// emits [AuthChangeEvent.passwordRecovery] and the app must show
+  /// the "set a new password" screen instead of the tracker.
+  /// Emits a single false while offline.
+  Stream<bool> get passwordRecoveryChanges {
+    if (!SupabaseInit.isOnlineMode) return Stream<bool>.value(false);
+    return _auth.auth.onAuthStateChange.map(
+      (data) => data.event == AuthChangeEvent.passwordRecovery,
+    );
+  }
+
   /// False while Supabase is not configured (local-only mode).
   bool get isAvailable => SupabaseInit.isOnlineMode;
 
@@ -161,5 +172,29 @@ class AuthService {
     if (email == null) throw Exception('No email on this account.');
     // Re-sends the Supabase signup confirmation email.
     await _auth.auth.resend(type: OtpType.signup, email: email);
+  }
+
+  /// Sends the password-reset email. The link in the mail returns to
+  /// the app via the same deep link as email confirmation (mobile) or
+  /// the Site URL (web); opening it emits
+  /// [AuthChangeEvent.passwordRecovery] and the app shows the
+  /// set-new-password screen. The deep link must be listed in the
+  /// Supabase dashboard (Auth -> URL Configuration -> Redirect URLs).
+  Future<void> sendPasswordResetEmail({required String email}) async {
+    _requireOnline();
+    await _auth.auth.resetPasswordForEmail(
+      email,
+      redirectTo: kIsWeb ? null : _authRedirect,
+    );
+  }
+
+  /// Sets the new password for the recovery session (after the user
+  /// opened the reset link). The session stays valid afterwards, so
+  /// the user lands signed in.
+  Future<void> updatePassword({required String newPassword}) async {
+    _requireOnline();
+    await _auth.auth.updateUser(
+      UserAttributes(password: newPassword),
+    );
   }
 }
