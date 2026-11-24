@@ -3,32 +3,31 @@ import 'dart:convert';
 
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'api_client.dart';
 import 'auth_service.dart';
 import 'community_service.dart';
-import 'supabase_init.dart';
 
 /// Per-chapter special notes: text, photo, or text + photo, saved per
 /// chapter to help next-time revision.
 ///
 /// Local cache lives in SharedPreferences under key 'chapter-notes-v1'
 /// (JSON map chapterId -> {text, localPhotoPath, photoUrl}) so notes work
-/// fully offline. When online, photos are uploaded to Supabase Storage
-/// bucket `notes` at `notes/<uid>/<chapterId>.jpg` and the public URL is
-/// stored; note metadata is mirrored to the Supabase `notes` table
-/// (one row per user + chapter, upserted on that key).
+/// fully offline. When signed in, photos are uploaded via
+/// POST /api/upload?kind=note and the note is mirrored to
+/// POST /api/notes.
+///
+/// Backend mapping: the `notes` table has no chapter_id column, so the
+/// chapter id travels in the `title` field (the chapter-note UI never
+/// shows a title). GET /api/notes returns all my notes; [getNote]
+/// picks the newest row whose title is the chapter id. Each save
+/// creates a new row — the newest one wins, older rows are ignored.
 class NotesRepository {
   NotesRepository._();
 
   static final NotesRepository instance = NotesRepository._();
 
   static const String cacheKey = 'chapter-notes-v1';
-
-  /// Public Storage bucket for note photos (see supabase/schema.sql).
-  static const String _storageBucket = 'notes';
-
-  SupabaseClient get _db => SupabaseInit.client;
 
   Future<Map<String, dynamic>> _readCache() async {
     final prefs = await SharedPreferences.getInstance();
@@ -53,27 +52,22 @@ class NotesRepository {
     required String text,
     String? localPhotoPath,
   }) async {
-    final uid = AuthService.instance.effectiveUid;
     final cache = await _readCache();
     final existing =
         (cache[chapterId] as Map?)?.cast<String, dynamic>() ?? {};
 
     String? photoUrl = existing['photoUrl'] as String?;
     if (localPhotoPath != null && localPhotoPath.isNotEmpty) {
-      if (SupabaseInit.isOnlineMode && uid != null) {
+      if (AuthService.instance.isSignedIn) {
         try {
           final bytes = await XFile(localPhotoPath).readAsBytes();
-          final storagePath = 'notes/$uid/$chapterId.jpg';
-          await _db.storage.from(_storageBucket).uploadBinary(
-                storagePath,
-                bytes,
-                fileOptions: const FileOptions(
-                  contentType: 'image/jpeg',
-                  upsert: true,
-                ),
-              );
-          photoUrl =
-              _db.storage.from(_storageBucket).getPublicUrl(storagePath);
+          final res = await ApiClient.instance.uploadImage(
+            filename: 'note_$chapterId.jpg',
+            kind: 'note',
+            bytes: bytes,
+            contentType: 'image/jpeg',
+          );
+          photoUrl = (res['url'] as String?) ?? photoUrl;
         } catch (_) {
           // Upload failed — keep the local path so the photo is not lost.
           photoUrl = null;
@@ -89,34 +83,23 @@ class NotesRepository {
     cache[chapterId] = note;
     await _writeCache(cache);
 
-    // The Supabase mirror is queued when offline (or when the write
+    // The server mirror is queued when offline (or when the write
     // fails) so SyncService replays it when the device is back online.
-    if (!SupabaseInit.isOnlineMode) {
-      await CommunityService.enqueueOp({
-        'type': 'note',
-        'chapterId': chapterId,
-        'text': text,
-        'localPhotoPath': note['localPhotoPath'],
-      });
-      return;
-    }
-
-    if (uid != null) {
-      try {
-        await _db.from('notes').upsert(
-          {
-            'user_id': uid,
-            'chapter_id': chapterId,
-            'text': text,
-            'photo_url': photoUrl,
-            'local_path': note['localPhotoPath'],
-            'updated_at': DateTime.now().toIso8601String(),
-          },
-          onConflict: 'user_id,chapter_id',
-        );
-      } catch (_) {
-        // Supabase mirror failed — queue it for the next sync instead of
-        // silently losing the cloud copy.
+    // There is no guest mode: the app root requires login, so this
+    // runs while signed in; a dead session just keeps the note in the
+    // local cache until the next save.
+    try {
+      await ApiClient.instance.post(
+        '/api/notes',
+        auth: true,
+        body: {
+          'title': chapterId,
+          'body': text,
+          'photo_url': photoUrl,
+        },
+      );
+    } on ApiException catch (e) {
+      if (e.code == 'NETWORK') {
         await CommunityService.enqueueOp({
           'type': 'note',
           'chapterId': chapterId,
@@ -124,6 +107,10 @@ class NotesRepository {
           'localPhotoPath': note['localPhotoPath'],
         });
       }
+      // Any other failure (e.g. session expired): the local cache
+      // above is the source of truth, so the note is not lost.
+    } catch (_) {
+      // Same: local cache keeps the note.
     }
   }
 
@@ -134,55 +121,24 @@ class NotesRepository {
     final local = (cache[chapterId] as Map?)?.cast<String, dynamic>();
     if (local != null) return local;
 
-    final uid = AuthService.instance.effectiveUid;
-    if (!SupabaseInit.isOnlineMode || uid == null) return null;
+    if (!AuthService.instance.isSignedIn) return null;
     try {
-      final row = await _db
-          .from('notes')
-          .select()
-          .eq('user_id', uid)
-          .eq('chapter_id', chapterId)
-          .maybeSingle();
-      if (row == null) return null;
-      return {
-        'text': row['text'],
-        'photoUrl': row['photo_url'],
-      };
+      final res = await ApiClient.instance.get('/api/notes', auth: true);
+      final rows = (res['notes'] as List?) ?? [];
+      // Newest first from the server; the first row whose title is
+      // this chapter id is the latest save for it.
+      for (final row in rows) {
+        if (row is! Map) continue;
+        final map = row.cast<String, dynamic>();
+        if ((map['title'] as String?) != chapterId) continue;
+        return {
+          'text': map['body'],
+          'photoUrl': map['photo_url'],
+        };
+      }
+      return null;
     } catch (_) {
       return null;
     }
-  }
-
-  /// Emits whenever the note for [chapterId] changes. Offline → a single
-  /// null event (the local cache is the source of truth there).
-  Stream<void> watchNote(String chapterId) {
-    final uid = AuthService.instance.effectiveUid;
-    if (!SupabaseInit.isOnlineMode || uid == null) {
-      return Stream<void>.value(null);
-    }
-    final controller = StreamController<void>();
-    var closed = false;
-    final channel = _db
-        .channel('public:notes:$chapterId')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'notes',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'chapter_id',
-            value: chapterId,
-          ),
-          callback: (_) {
-            if (!closed) controller.add(null);
-          },
-        )
-        .subscribe();
-    controller.onCancel = () async {
-      closed = true;
-      await channel.unsubscribe();
-      await controller.close();
-    };
-    return controller.stream;
   }
 }

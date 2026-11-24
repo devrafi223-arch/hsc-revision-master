@@ -7,7 +7,6 @@ import '../milestones.dart';
 import '../models/app_user.dart';
 import '../models/milestone.dart';
 import '../services/auth_service.dart';
-import '../services/supabase_init.dart';
 import '../services/user_repository.dart';
 import '../tracker_store.dart';
 import '../widgets/milestone_celebration.dart';
@@ -40,26 +39,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _privacy = 'public';
   String _photoVisibility = 'all';
 
-  String? get _uid => AuthService.instance.effectiveUid;
+  String? get _uid => AuthService.instance.currentUid;
   bool get _isOwn => widget.userId == null || widget.userId == _uid;
   String? get _targetUid => widget.userId ?? _uid;
 
   bool _photoBusy = false;
 
-  /// Picks a photo, uploads it to the public `notes` bucket and sets
-  /// it as this profile's photo (own profile only).
+  /// Picks a photo, uploads it via POST /api/upload?kind=profile and
+  /// sets it as this profile's photo (own profile only).
   Future<void> _changePhoto() async {
     final uid = _targetUid;
     if (uid == null || _photoBusy) return;
-    if (!SupabaseInit.isOnlineMode) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You are offline — photo upload needs internet.'),
-        ),
-      );
-      return;
-    }
     setState(() => _photoBusy = true);
     try {
       final picked = await ImagePicker().pickImage(
@@ -148,8 +138,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _follow(AppUser target) async {
     final uid = _uid;
     if (uid == null) {
-      await _showInfo(
-        'Sign in to follow ${target.name}.',
+      // No guest mode: go to the login screen.
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const AuthScreen()),
       );
       return;
     }
@@ -206,43 +198,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     if (targetUid == null) {
-      final body = ListView(
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
-        children: [
-          Text(
-            'You are not signed in.',
-            style: base.copyWith(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Sign in to sync your progress, join the community and be seen on the leaderboard.',
-            style: base.copyWith(fontSize: 15, color: muted, height: 1.45),
-          ),
-          const SizedBox(height: 20),
-          FilledButton(
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const AuthScreen(),
-                ),
-              );
-            },
-            style: FilledButton.styleFrom(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-            ),
-            child: const Text('Sign in / Register'),
-          ),
-        ],
-      );
-      if (!widget.showAppBar) return body;
-      return Scaffold(
-        appBar: AppBar(title: const Text('Profile')),
-        body: SafeArea(child: body),
+      // No guest mode: without a signed-in user this screen routes
+      // straight to the login screen (the app root normally gates
+      // here first, so this is only a safety net).
+      if (!widget.showAppBar) return const AuthScreen();
+      return const Scaffold(
+        body: SafeArea(child: AuthScreen()),
       );
     }
     final content = StreamBuilder<AppUser?>(
@@ -274,8 +235,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
           return _ProfileBody(
             user: AppUser(
               id: targetUid,
-              name: 'Student',
-              email: '',
+              name: AuthService.instance.currentUser?.name ?? 'Student',
+              email: AuthService.instance.currentUser?.email ?? '',
+              photoUrl: AuthService.instance.currentUser?.photoUrl,
             ),
             isOwn: true,
             storeLoaded: _storeLoaded,

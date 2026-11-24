@@ -5,7 +5,7 @@ import '../main.dart';
 import '../services/app_log.dart';
 
 /// App logs viewer (Settings → App logs): everything the app recorded
-/// since launch — startup, Supabase init, auth, errors — so Rafi can
+/// since launch — startup, session restore, auth, errors — so Rafi can
 /// copy it and paste it to Arlo when something goes wrong.
 ///
 /// On Windows the same lines also live in a file next to the exe

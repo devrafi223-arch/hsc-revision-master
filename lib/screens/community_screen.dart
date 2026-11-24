@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -14,7 +14,6 @@ import '../services/moderation.dart';
 import '../services/presence_service.dart';
 import '../services/sync_service.dart';
 import '../services/user_repository.dart';
-import '../services/voice_service.dart';
 import 'profile_screen.dart';
 
 const List<String> _monthNames = [
@@ -38,15 +37,18 @@ String _formatTimestamp(DateTime t) {
   return '$hh:$mm, ${t.day} ${_monthNames[t.month - 1]}';
 }
 
-/// What the UI shows as a message's author. Anonymous messages never
-/// reveal the real name or photo, but the stored authorId is still used
-/// for moderation, reporting and blocking.
-String _displayName(CommunityMessage message) =>
-    message.isAnonymous ? 'Anonymous' : message.authorName;
+/// What the UI shows as a message's author: always the JWT user's
+/// display name. There is no anonymous posting.
+String _displayName(CommunityMessage message) => message.authorName;
 
 /// The universal community feed: everyone's progress on a rail at the
-/// top, realtime messages below, polls, voice, reactions, reply,
-/// bookmark, report, block, pin, search and an offline banner.
+/// top, messages below (polled every few seconds — no Realtime on the
+/// custom backend), polls, reactions, reply, bookmark, report, block,
+/// pin, search and an offline banner.
+///
+/// Anonymous posting is gone: the backend always records the signed-in
+/// user's name. Voice messages are gone too: recording was a UI stub
+/// and the backend has no audio storage — the mic button says so.
 class CommunityScreen extends StatefulWidget {
   const CommunityScreen({super.key});
 
@@ -61,51 +63,18 @@ class _CommunityScreenState extends State<CommunityScreen> {
   String _searchQuery = '';
   bool _bookmarkedOnly = false;
   CommunityMessage? _replyTo;
-  bool _recording = false;
   int _lastMessageCount = 0;
-  String? _playingVoiceId;
 
-  /// Anonymous posting: [_anonymousSession] is the header switch — on
-  /// for the whole session until turned off. [_anonymousOnce] is the
-  /// per-message composer chip — reset after every send. Either one on
-  /// means the message goes out anonymous.
-  bool _anonymousSession = false;
-  bool _anonymousOnce = false;
-  bool get _anonymousEffective => _anonymousSession || _anonymousOnce;
-
-  /// The composer chip flips the effective state: when the session
-  /// switch is on, tapping the chip turns the session off (so this
-  /// message is not anonymous); otherwise it toggles the per-message
-  /// choice.
-  void _toggleAnonymousComposer() {
-    setState(() {
-      if (_anonymousSession) {
-        _anonymousSession = false;
-        _anonymousOnce = false;
-      } else {
-        _anonymousOnce = !_anonymousOnce;
-      }
-    });
-  }
-
-  String? get _uid => AuthService.instance.effectiveUid;
+  String? get _uid => AuthService.instance.currentUid;
 
   @override
   void initState() {
     super.initState();
-    // Join presence once per screen lifetime: who is online and who
-    // is typing. The rail keeps its own leaderboard future, so the
-    // presence rebuilds below never refetch it.
-    final uid = _uid;
-    if (uid != null) {
-      UserRepository.instance.getUser(uid).then((user) {
-        if (!mounted) return;
-        PresenceService.instance.start(
-          uid: uid,
-          name: user?.name ?? 'Student',
-        );
-      });
-    }
+    // Start presence once per screen lifetime: who is online (polled
+    // every 10 s, heartbeat every 30 s). The rail keeps its own
+    // leaderboard future, so the presence rebuilds below never
+    // refetch it.
+    unawaited(PresenceService.instance.start());
   }
 
   @override
@@ -148,7 +117,6 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   Future<void> _sendText() async {
-    PresenceService.instance.clearTyping();
     final text = _composerController.text.trim();
     if (text.isEmpty) return;
     if (Moderation.isFlagged(text)) {
@@ -158,28 +126,20 @@ class _CommunityScreenState extends State<CommunityScreen> {
       return;
     }
     final replyTo = _replyTo;
-    final anonymous = _anonymousEffective;
     _composerController.clear();
-    setState(() {
-      _replyTo = null;
-      _anonymousOnce = false;
-    });
+    setState(() => _replyTo = null);
     try {
       if (replyTo != null) {
         await CommunityService.instance.reply(
           replyTo.id,
           text,
-          replyTo.text ?? '',
-          anonymous: anonymous,
+          replyTo.text ?? (replyTo.photoUrl != null ? 'Photo' : ''),
         );
       } else {
-        await CommunityService.instance.sendText(
-          text,
-          anonymous: anonymous,
-        );
+        await CommunityService.instance.sendText(text);
       }
     } catch (e) {
-      await _showError(e.toString());
+      await _showError(AuthService.friendlyError(e));
     }
   }
 
@@ -189,55 +149,29 @@ class _CommunityScreenState extends State<CommunityScreen> {
     );
     if (picked == null) return;
     try {
-      await CommunityService.instance.sendPhoto(
-        picked.path,
-        anonymous: _anonymousEffective,
-      );
-      if (mounted) setState(() => _anonymousOnce = false);
+      await CommunityService.instance.sendPhoto(picked.path);
     } catch (e) {
-      await _showError(e.toString());
+      await _showError(AuthService.friendlyError(e));
     }
   }
 
-  Future<void> _toggleVoiceRecording() async {
-    if (_recording) {
-      final result = await VoiceService.instance.stopRecording();
-      setState(() => _recording = false);
-      if (result == null) return;
-      final path = result['path'] as String?;
-      final seconds = (result['seconds'] as num?)?.toInt() ?? 0;
-      if (path == null || path.isEmpty) return;
-      try {
-        await CommunityService.instance.sendVoice(
-          path,
-          seconds,
-          anonymous: _anonymousEffective,
-        );
-        if (mounted) setState(() => _anonymousOnce = false);
-      } catch (e) {
-        await _showError(e.toString());
-      }
-      return;
-    }
-    final started = await VoiceService.instance.startRecording();
-    if (started == null) {
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Voice messages'),
-          content: const Text('Voice recording coming soon on this device.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-    setState(() => _recording = true);
+  /// Voice messages are not supported on the custom backend (no audio
+  /// storage) — the mic button says so instead of pretending to record.
+  Future<void> _showVoiceComingSoon() async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Voice messages'),
+        content: const Text('Voice messages are coming soon.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _createPoll() async {
@@ -306,27 +240,15 @@ class _CommunityScreenState extends State<CommunityScreen> {
       return;
     }
     try {
-      await CommunityService.instance.sendPoll(
-        question,
-        options,
-        anonymous: _anonymousEffective,
-      );
-      if (mounted) setState(() => _anonymousOnce = false);
+      await CommunityService.instance.sendPoll(question, options);
     } catch (e) {
-      await _showError(e.toString());
+      await _showError(AuthService.friendlyError(e));
     }
   }
 
   Future<void> _showMessageActions(CommunityMessage message) async {
     final uid = _uid;
-    var isAdmin = false;
-    if (uid != null) {
-      try {
-        isAdmin = await AdminService.instance.isAdmin(uid);
-      } catch (_) {
-        isAdmin = false;
-      }
-    }
+    final isAdmin = AdminService.instance.isAdmin();
     if (!mounted) return;
     final bookmarked = uid != null && message.bookmarkedBy.contains(uid);
     await showModalBottomSheet<void>(
@@ -426,7 +348,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
     try {
       await CommunityService.instance.report(message.id, reason);
     } catch (e) {
-      await _showError(e.toString());
+      await _showError(AuthService.friendlyError(e));
     }
   }
 
@@ -455,25 +377,8 @@ class _CommunityScreenState extends State<CommunityScreen> {
     try {
       await CommunityService.instance.blockUser(message.authorId);
     } catch (e) {
-      await _showError(e.toString());
+      await _showError(AuthService.friendlyError(e));
     }
-  }
-
-  Future<void> _togglePlayVoice(CommunityMessage message) async {
-    final url = message.voiceUrl;
-    if (url == null || url.isEmpty) return;
-    if (_playingVoiceId == message.id) {
-      await VoiceService.instance.stopPlaying();
-      setState(() => _playingVoiceId = null);
-      return;
-    }
-    setState(() => _playingVoiceId = message.id);
-    try {
-      await VoiceService.instance.playVoice(url);
-    } catch (_) {
-      // Playback errors are best effort; clear the playing state.
-    }
-    if (mounted) setState(() => _playingVoiceId = null);
   }
 
   List<CommunityMessage> _visibleMessages(List<CommunityMessage> all) {
@@ -547,37 +452,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
             },
           ),
         ),
-        // Session-wide anonymous posting: stays on until turned off.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.person,
-                size: 18,
-                color: JimColors.rose,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Post as Anonymous',
-                  style: base.copyWith(fontSize: 14, height: 1.45),
-                ),
-              ),
-              Switch(
-                key: const Key('anonymous-session-switch'),
-                value: _anonymousSession,
-                activeTrackColor: JimColors.rose,
-                onChanged: (value) {
-                  setState(() {
-                    _anonymousSession = value;
-                    if (!value) _anonymousOnce = false;
-                  });
-                },
-              ),
-            ],
-          ),
-        ),
+        // The search field and the Bookmarked filter sit above the
+        // feed; the live line says plainly that messages refresh
+        // every few seconds (polling — no Realtime on Vercel).
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
           child: TextField(
@@ -615,7 +492,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
                         ? ''
                         : '● ${snapshot.onlineUids.length} online • ';
                     return Text(
-                      '${online}Realtime • messages appear instantly when online',
+                      '${online}Live • messages refresh every few seconds',
                       style: base.copyWith(
                         fontSize: 13,
                         color: muted,
@@ -683,43 +560,18 @@ class _CommunityScreenState extends State<CommunityScreen> {
                   return _MessageBubble(
                     message: message,
                     currentUid: _uid,
-                    isPlayingVoice: _playingVoiceId == message.id,
                     onLongPress: () => _showMessageActions(message),
                     onReact: (emoji) =>
                         CommunityService.instance.react(message.id, emoji),
-                    onVote: (optionIndex) =>
-                        CommunityService.instance.vote(message.id, optionIndex),
-                    onPlayVoice: () => _togglePlayVoice(message),
+                    onVote: (optionIndex) => CommunityService.instance.vote(
+                      message.poll?.id ?? message.id,
+                      optionIndex,
+                    ),
                   );
                 },
               );
             },
           ),
-        ),
-        ValueListenableBuilder<PresenceSnapshot>(
-          valueListenable: PresenceService.instance.notifier,
-          builder: (context, snapshot, _) {
-            if (snapshot.typingNames.isEmpty) {
-              return const SizedBox.shrink();
-            }
-            final names = snapshot.typingNames.take(2).join(', ');
-            final more = snapshot.typingNames.length > 2
-                ? ' +${snapshot.typingNames.length - 2}'
-                : '';
-            final verb = snapshot.typingNames.length == 1 ? 'is' : 'are';
-            return Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-              child: Text(
-                '$names$more $verb typing…',
-                style: base.copyWith(
-                  fontSize: 12,
-                  color: muted,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            );
-          },
         ),
         Container(
           decoration: BoxDecoration(
@@ -767,74 +619,22 @@ class _CommunityScreenState extends State<CommunityScreen> {
                     icon: const Icon(Icons.bar_chart),
                   ),
                   IconButton(
-                    onPressed: _toggleVoiceRecording,
-                    icon: Icon(
-                      _recording ? Icons.stop_circle : Icons.mic,
-                      color: _recording ? Colors.red : null,
-                    ),
+                    onPressed: _showVoiceComingSoon,
+                    icon: const Icon(Icons.mic),
                   ),
                   Expanded(
                     child: TextField(
                       controller: _composerController,
                       decoration: jimFieldDecoration(
                         dark: isDark,
-                        hint: _recording
-                            ? 'Recording… tap the mic to stop'
-                            : 'Write a message…',
+                        hint: 'Write a message…',
                         borderRadius: 999,
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 14,
                           vertical: 8,
                         ),
                       ),
-                      onChanged: (_) => PresenceService.instance.setTyping(),
                       onSubmitted: (_) => _sendText(),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  // Per-message anonymous toggle, next to the send
-                  // field. Shows the effective state (session switch
-                  // or this message); tapping flips it.
-                  GestureDetector(
-                    key: const Key('anonymous-composer-chip'),
-                    onTap: _toggleAnonymousComposer,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 7,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _anonymousEffective
-                            ? JimColors.rose
-                            : const Color(0x00000000),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: _anonymousEffective ? JimColors.rose : line,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.person,
-                            size: 13,
-                            color: _anonymousEffective ? Colors.white : muted,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Anonymous',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: _anonymousEffective
-                                  ? Colors.white
-                                  : (isDark
-                                      ? JimColors.darkText
-                                      : JimColors.ink),
-                            ),
-                          ),
-                        ],
-                      ),
                     ),
                   ),
                   const SizedBox(width: 4),
@@ -1117,20 +917,16 @@ class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
     required this.message,
     required this.currentUid,
-    required this.isPlayingVoice,
     required this.onLongPress,
     required this.onReact,
     required this.onVote,
-    required this.onPlayVoice,
   });
 
   final CommunityMessage message;
   final String? currentUid;
-  final bool isPlayingVoice;
   final VoidCallback onLongPress;
   final ValueChanged<String> onReact;
   final ValueChanged<int> onVote;
-  final VoidCallback onPlayVoice;
 
   @override
   Widget build(BuildContext context) {
@@ -1200,8 +996,7 @@ class _MessageBubble extends StatelessWidget {
                         style: base.copyWith(
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
-                          color:
-                              message.isAnonymous ? muted : JimColors.rose,
+                          color: JimColors.rose,
                         ),
                       ),
                     ),
@@ -1266,17 +1061,11 @@ class _MessageBubble extends StatelessWidget {
               const SizedBox(height: 6),
               ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: message.photoUrl!.startsWith('http')
-                    ? Image.network(
-                        message.photoUrl!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                      )
-                    : Image.file(
-                        File(message.photoUrl!),
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                      ),
+                child: Image.network(
+                  message.photoUrl!,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
               ),
             ],
             if (message.type == MessageType.poll && message.poll != null) ...[
@@ -1285,14 +1074,6 @@ class _MessageBubble extends StatelessWidget {
                 poll: message.poll!,
                 currentUid: currentUid,
                 onVote: onVote,
-              ),
-            ],
-            if (message.type == MessageType.voice &&
-                message.voiceUrl != null) ...[
-              const SizedBox(height: 6),
-              _VoiceRow(
-                isPlaying: isPlayingVoice,
-                onPlay: onPlayVoice,
               ),
             ],
             const SizedBox(height: 6),
@@ -1355,9 +1136,8 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
-/// Small round avatar next to other people's bubbles: generic grey
-/// person for anonymous messages (no photo, no name); initial or photo
-/// otherwise.
+/// Small round avatar next to other people's bubbles: photo or
+/// initial.
 class _BubbleAvatar extends StatelessWidget {
   const _BubbleAvatar({required this.message, required this.isDark});
 
@@ -1372,11 +1152,8 @@ class _BubbleAvatar extends StatelessWidget {
       alignment: Alignment.center,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: message.isAnonymous
-            ? (isDark ? JimColors.darkLine : JimColors.line)
-            : JimColors.rose,
-        image: !message.isAnonymous &&
-                message.authorPhoto != null &&
+        color: JimColors.rose,
+        image: message.authorPhoto != null &&
                 message.authorPhoto!.isNotEmpty
             ? DecorationImage(
                 image: NetworkImage(message.authorPhoto!),
@@ -1385,24 +1162,18 @@ class _BubbleAvatar extends StatelessWidget {
               )
             : null,
       ),
-      child: message.isAnonymous
-          ? const Icon(
-              Icons.person,
-              size: 15,
-              color: Colors.white,
+      child: message.authorPhoto == null || message.authorPhoto!.isEmpty
+          ? Text(
+              message.authorName.isNotEmpty
+                  ? message.authorName[0].toUpperCase()
+                  : '?',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
             )
-          : message.authorPhoto == null || message.authorPhoto!.isEmpty
-              ? Text(
-                  message.authorName.isNotEmpty
-                      ? message.authorName[0].toUpperCase()
-                      : '?',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                  ),
-                )
-              : null,
+          : null,
     );
   }
 }
@@ -1569,38 +1340,6 @@ class _PollCard extends StatelessWidget {
           ],
         ],
       ),
-    );
-  }
-}
-
-class _VoiceRow extends StatelessWidget {
-  const _VoiceRow({required this.isPlaying, required this.onPlay});
-
-  final bool isPlaying;
-  final VoidCallback onPlay;
-
-  @override
-  Widget build(BuildContext context) {
-    final base = Theme.of(context).textTheme.bodyMedium!;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final muted = isDark ? JimColors.darkMuted : JimColors.muted;
-    return Row(
-      children: [
-        IconButton(
-          onPressed: onPlay,
-          icon: Icon(
-            isPlaying ? Icons.stop_circle : Icons.play_circle,
-            size: 28,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            isPlaying ? 'Playing…' : 'Voice message',
-            style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
-          ),
-        ),
-      ],
     );
   }
 }

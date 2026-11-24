@@ -4,34 +4,21 @@ import 'package:flutter/services.dart';
 import '../main.dart';
 import '../services/auth_service.dart';
 
-/// Which code flow this screen verifies.
-enum OtpPurpose { signup, recovery }
-
-/// 6-digit code entry screen, used for both flows that used to rely
-/// on mail LINKS (which show a blank page on a PC browser and cannot
-/// open the Windows app):
+/// 6-digit code entry screen for login.
 ///
-/// * signup — the code from the confirmation mail, verified with
-///   [AuthService.verifySignupCode]; on success the session is set.
-/// * recovery — the code from the reset mail, verified with
-///   [AuthService.verifyRecoveryCode]; on success the app shows the
-///   set-new-password screen.
-///
-/// The mail must contain the code: the Supabase dashboard templates
-/// ("Confirm signup" and "Reset Password") must include
-/// `{{ .Token }}`. The screen pops itself after a successful verify;
-/// the app root then shows the tracker (signup) or the reset screen
-/// (recovery, via [AuthService.recoveryPending]).
+/// The code comes from the mail sent by POST /api/auth/send-code:
+/// verifying it with POST /api/auth/verify-code starts a 7-day JWT
+/// session (the same code creates the account on first use). The
+/// screen pops itself after a successful verify; the app root then
+/// shows the tracker (via [AuthService.signedIn]).
 class OtpScreen extends StatefulWidget {
   const OtpScreen({
     super.key,
     required this.email,
-    required this.purpose,
     this.onVerified,
   });
 
   final String email;
-  final OtpPurpose purpose;
   final VoidCallback? onVerified;
 
   @override
@@ -50,8 +37,6 @@ class _OtpScreenState extends State<OtpScreen> {
     super.dispose();
   }
 
-  bool get _isSignup => widget.purpose == OtpPurpose.signup;
-
   Future<void> _showError(String message) async {
     if (!mounted) return;
     setState(() => _error = message);
@@ -69,17 +54,10 @@ class _OtpScreenState extends State<OtpScreen> {
       _info = null;
     });
     try {
-      if (_isSignup) {
-        await AuthService.instance.verifySignupCode(
-          email: widget.email,
-          code: code,
-        );
-      } else {
-        await AuthService.instance.verifyRecoveryCode(
-          email: widget.email,
-          code: code,
-        );
-      }
+      await AuthService.instance.verifyLoginCode(
+        email: widget.email,
+        code: code,
+      );
       if (!mounted) return;
       widget.onVerified?.call();
       Navigator.of(context).pop();
@@ -97,12 +75,7 @@ class _OtpScreenState extends State<OtpScreen> {
       _info = null;
     });
     try {
-      if (_isSignup) {
-        await AuthService.instance.resendSignupCode(email: widget.email);
-      } else {
-        await AuthService.instance
-            .sendPasswordResetEmail(email: widget.email);
-      }
+      await AuthService.instance.sendLoginCode(email: widget.email);
       if (!mounted) return;
       setState(() {
         _busy = false;
@@ -122,7 +95,7 @@ class _OtpScreenState extends State<OtpScreen> {
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isSignup ? 'Confirm your email' : 'Reset password'),
+        title: const Text('Enter the code'),
       ),
       body: SafeArea(
         child: ListView(

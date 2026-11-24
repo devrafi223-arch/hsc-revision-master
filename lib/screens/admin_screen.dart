@@ -1,17 +1,95 @@
 import 'package:flutter/material.dart';
 
 import '../main.dart';
+import '../models/app_user.dart';
 import '../services/admin_service.dart';
 import '../services/auth_service.dart';
 
-/// Admin panel. Guarded: only admins (per [AdminService.isAdmin]) see
-/// the stats and reports; everyone else sees "Admin only".
-class AdminScreen extends StatelessWidget {
+/// Admin panel (web `/admin` only). Guarded by the gate: only admins
+/// (per [AdminService.isAdmin], from GET /api/auth/me) reach here.
+///
+/// Overview shows Total users + Active today (computed from the users
+/// list). Message/report counts, mute, ban and delete-message do not
+/// exist on the backend — the panel does not pretend they do.
+///
+/// Users: newest first, 50 per page with a Load more button. Deleting
+/// a user removes them (and their messages/milestones) server-side;
+/// the admin can never delete themselves (the server answers 400).
+class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key, this.onSignOut});
 
   /// Shown as a logout button in the AppBar. Set by the /admin gate
   /// (web); null when the panel is opened any other way.
   final VoidCallback? onSignOut;
+
+  @override
+  State<AdminScreen> createState() => _AdminScreenState();
+}
+
+class _AdminScreenState extends State<AdminScreen> {
+  static const _pageSize = 50;
+
+  final List<AppUser> _users = [];
+  int _total = 0;
+  bool _loading = true;
+  bool _loadingMore = false;
+  String? _error;
+  Map<String, int>? _stats;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final page = await AdminService.instance.listUsers(limit: _pageSize);
+      final stats = await AdminService.instance.stats();
+      if (!mounted) return;
+      setState(() {
+        _users
+          ..clear()
+          ..addAll(page['users'] as List<AppUser>);
+        _total = (page['total'] as int?) ?? _users.length;
+        _stats = stats;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = AuthService.friendlyError(e);
+      });
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_loadingMore || _users.length >= _total) return;
+    setState(() => _loadingMore = true);
+    try {
+      final page = await AdminService.instance.listUsers(
+        limit: _pageSize,
+        offset: _users.length,
+      );
+      if (!mounted) return;
+      setState(() {
+        _users.addAll(page['users'] as List<AppUser>);
+        _total = (page['total'] as int?) ?? _total;
+        _loadingMore = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingMore = false;
+        _error = AuthService.friendlyError(e);
+      });
+    }
+  }
 
   Future<void> _showInfo(BuildContext context, String message) async {
     await showDialog<void>(
@@ -28,17 +106,14 @@ class AdminScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _confirm(
-    BuildContext context,
-    String title,
-    String message,
-    Future<void> Function() action,
-  ) async {
+  Future<void> _confirmDelete(AppUser user) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(title),
-        content: Text(message),
+        title: const Text('Delete this user?'),
+        content: Text(
+          '${user.name} (${user.email}) will be removed, along with their messages and milestones. This cannot be undone.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -47,13 +122,23 @@ class AdminScreen extends StatelessWidget {
           TextButton(
             style: TextButton.styleFrom(foregroundColor: Colors.red),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Confirm'),
+            child: const Text('Delete'),
           ),
         ],
       ),
     );
     if (ok != true) return;
-    await action();
+    try {
+      await AdminService.instance.deleteUser(user.id);
+      if (!mounted) return;
+      setState(() {
+        _users.removeWhere((u) => u.id == user.id);
+        _total = _total > 0 ? _total - 1 : 0;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      await _showInfo(context, AuthService.friendlyError(e));
+    }
   }
 
   Widget _statCard(
@@ -93,63 +178,66 @@ class AdminScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final uid = AuthService.instance.effectiveUid;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final base = Theme.of(context).textTheme.bodyMedium!;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
     final line = isDark ? JimColors.darkLine : JimColors.line;
+    final myId = AuthService.instance.currentUid;
+    if (!AdminService.instance.isAdmin()) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Admin panel')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'Admin only.',
+              style: base.copyWith(fontSize: 15, color: muted, height: 1.45),
+            ),
+          ),
+        ),
+      );
+    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('Admin panel'),
         actions: [
-          if (onSignOut != null)
+          if (widget.onSignOut != null)
             IconButton(
-              onPressed: onSignOut,
+              onPressed: widget.onSignOut,
               icon: const Icon(Icons.logout),
               tooltip: 'Sign out',
             ),
         ],
       ),
       body: SafeArea(
-        child: uid == null
-            ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(
-                    'Admin only — sign in with an admin account.',
-                    textAlign: TextAlign.center,
-                    style: base.copyWith(
-                      fontSize: 15,
-                      color: muted,
-                      height: 1.45,
-                    ),
-                  ),
-                ),
-              )
-            : FutureBuilder<bool>(
-                future: AdminService.instance.isAdmin(uid),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return const Center(
-                      child: CircularProgressIndicator(),
-                    );
-                  }
-                  if (snapshot.data != true) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          'Admin only.',
-                          style: base.copyWith(
-                            fontSize: 15,
-                            color: muted,
-                            height: 1.45,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null && _users.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _error!,
+                            textAlign: TextAlign.center,
+                            style: base.copyWith(
+                              fontSize: 15,
+                              color: muted,
+                              height: 1.45,
+                            ),
                           ),
-                        ),
+                          const SizedBox(height: 16),
+                          FilledButton(
+                            onPressed: _load,
+                            child: const Text('Try again'),
+                          ),
+                        ],
                       ),
-                    );
-                  }
-                  return ListView(
+                    ),
+                  )
+                : ListView(
                     padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
                     children: [
                       Text(
@@ -160,254 +248,45 @@ class AdminScreen extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 12),
-                      FutureBuilder<Map<String, int>>(
-                        future: AdminService.instance.stats(),
-                        builder: (context, statsSnapshot) {
-                          final stats = statsSnapshot.data ??
-                              {
-                                'totalUsers': 0,
-                                'totalMessages': 0,
-                                'totalReports': 0,
-                                'activeToday': 0,
-                              };
-                          return Column(
-                            children: [
-                              Row(
-                                children: [
-                                  _statCard(
-                                    context,
-                                    'Total users',
-                                    stats['totalUsers'] ?? 0,
-                                  ),
-                                  const SizedBox(width: 12),
-                                  _statCard(
-                                    context,
-                                    'Total messages',
-                                    stats['totalMessages'] ?? 0,
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              Row(
-                                children: [
-                                  _statCard(
-                                    context,
-                                    'Reports',
-                                    stats['totalReports'] ?? 0,
-                                  ),
-                                  const SizedBox(width: 12),
-                                  _statCard(
-                                    context,
-                                    'Active today',
-                                    stats['activeToday'] ?? 0,
-                                  ),
-                                ],
-                              ),
-                            ],
-                          );
-                        },
+                      Row(
+                        children: [
+                          _statCard(
+                            context,
+                            'Total users',
+                            _stats?['totalUsers'] ?? _total,
+                          ),
+                          const SizedBox(width: 12),
+                          _statCard(
+                            context,
+                            'Active today',
+                            _stats?['activeToday'] ?? 0,
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 24),
                       Text(
-                        'Reports',
+                        'Users ($_total)',
                         style: base.copyWith(
                           fontSize: 18,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       const SizedBox(height: 12),
-                      StreamBuilder<List<Map<String, dynamic>>>(
-                        stream: AdminService.instance.reportsStream(),
-                        builder: (context, snapshot) {
-                          if (!snapshot.hasData) {
-                            return const Center(
-                              child: CircularProgressIndicator(),
-                            );
-                          }
-                          final reports = snapshot.data!;
-                          if (reports.isEmpty) {
-                            return Text(
-                              'No reports — nothing needs review.',
-                              style: base.copyWith(
-                                fontSize: 15,
-                                color: muted,
-                                height: 1.45,
-                              ),
-                            );
-                          }
-                          return Column(
-                            children: reports.map((report) {
-                              final reportId = (report['id'] as String?) ?? '';
-                              final messageId =
-                                  (report['messageId'] as String?) ?? '';
-                              final reason =
-                                  (report['reason'] as String?) ?? '';
-                              final reporter =
-                                  (report['reporterName'] as String?) ??
-                                      'Someone';
-                              // The report may also carry the author's uid
-                              // (key name depends on the backend); mute/ban
-                              // need it, so the buttons fall back to an
-                              // explanation when it is missing.
-                              final userUid = (report['authorId'] as String?) ??
-                                  (report['userId'] as String?) ??
-                                  (report['reporterUid'] as String?);
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: isDark
-                                      ? JimColors.darkSurface
-                                      : JimColors.card,
-                                  borderRadius: BorderRadius.circular(24),
-                                  border: Border.all(color: line),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      reason,
-                                      style: base.copyWith(
-                                        fontSize: 15,
-                                        height: 1.45,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'Reported by $reporter · $reportId',
-                                      style: base.copyWith(
-                                        fontSize: 13,
-                                        color: muted,
-                                        height: 1.45,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
-                                      children: [
-                                        FilledButton(
-                                          onPressed: () => _confirm(
-                                            context,
-                                            'Delete this message?',
-                                            'The message will be removed from the community.',
-                                            () => AdminService.instance
-                                                .deleteMessage(messageId),
-                                          ),
-                                          style: FilledButton.styleFrom(
-                                            backgroundColor: isDark
-                                                ? JimColors.darkBg
-                                                : JimColors.paper,
-                                            foregroundColor: isDark
-                                                ? JimColors.darkText
-                                                : JimColors.ink,
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 14,
-                                              vertical: 6,
-                                            ),
-                                            shape: const StadiumBorder(),
-                                          ),
-                                          child: const Text(
-                                            'Delete message',
-                                            style: TextStyle(fontSize: 14),
-                                          ),
-                                        ),
-                                        FilledButton(
-                                          onPressed: () {
-                                            if (userUid == null ||
-                                                userUid.isEmpty) {
-                                              _showInfo(
-                                                context,
-                                                'This report does not include the author — open the message in the community to act on them.',
-                                              );
-                                              return;
-                                            }
-                                            _confirm(
-                                              context,
-                                              'Mute this user?',
-                                              'They will not be able to post for a while.',
-                                              () => AdminService.instance
-                                                  .muteUser(userUid),
-                                            );
-                                          },
-                                          style: FilledButton.styleFrom(
-                                            backgroundColor: isDark
-                                                ? JimColors.darkBg
-                                                : JimColors.paper,
-                                            foregroundColor: isDark
-                                                ? JimColors.darkText
-                                                : JimColors.ink,
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 14,
-                                              vertical: 6,
-                                            ),
-                                            shape: const StadiumBorder(),
-                                          ),
-                                          child: const Text(
-                                            'Mute user',
-                                            style: TextStyle(fontSize: 14),
-                                          ),
-                                        ),
-                                        FilledButton(
-                                          onPressed: () {
-                                            if (userUid == null ||
-                                                userUid.isEmpty) {
-                                              _showInfo(
-                                                context,
-                                                'This report does not include the author — open the message in the community to act on them.',
-                                              );
-                                              return;
-                                            }
-                                            _confirm(
-                                              context,
-                                              'Ban this user?',
-                                              'They will lose access to the community.',
-                                              () => AdminService.instance
-                                                  .banUser(userUid),
-                                            );
-                                          },
-                                          style: FilledButton.styleFrom(
-                                            backgroundColor: isDark
-                                                ? JimColors.darkBg
-                                                : JimColors.paper,
-                                            foregroundColor: isDark
-                                                ? JimColors.darkText
-                                                : JimColors.ink,
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 14,
-                                              vertical: 6,
-                                            ),
-                                            shape: const StadiumBorder(),
-                                          ),
-                                          child: const Text(
-                                            'Ban user',
-                                            style: TextStyle(fontSize: 14),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }).toList(),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      Text(
-                        'Analytics',
-                        style: base.copyWith(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      FutureBuilder<Map<String, int>>(
-                        future: AdminService.instance.stats(),
-                        builder: (context, statsSnapshot) {
-                          final stats = statsSnapshot.data ?? {};
+                      if (_users.isEmpty)
+                        Text(
+                          'No users yet.',
+                          style: base.copyWith(
+                            fontSize: 15,
+                            color: muted,
+                            height: 1.45,
+                          ),
+                        )
+                      else
+                        ..._users.map((user) {
+                          final isMe = user.id == myId;
                           return Container(
-                            padding: const EdgeInsets.all(20),
+                            margin: const EdgeInsets.only(bottom: 12),
+                            padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
                               color: isDark
                                   ? JimColors.darkSurface
@@ -415,63 +294,91 @@ class AdminScreen extends StatelessWidget {
                               borderRadius: BorderRadius.circular(24),
                               border: Border.all(color: line),
                             ),
-                            child: Column(
+                            child: Row(
                               children: [
-                                _AnalyticsRow(
-                                  label: 'Registered users',
-                                  value: '${stats['totalUsers'] ?? 0}',
+                                CircleAvatar(
+                                  radius: 20,
+                                  backgroundColor: isDark
+                                      ? JimColors.darkLine
+                                      : JimColors.line,
+                                  backgroundImage: user.photoUrl != null
+                                      ? NetworkImage(user.photoUrl!)
+                                      : null,
+                                  child: user.photoUrl == null
+                                      ? Text(
+                                          user.name.isNotEmpty
+                                              ? user.name[0].toUpperCase()
+                                              : '?',
+                                          style: base.copyWith(
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        )
+                                      : null,
                                 ),
-                                _AnalyticsRow(
-                                  label: 'Messages sent',
-                                  value: '${stats['totalMessages'] ?? 0}',
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        user.name.isNotEmpty
+                                            ? user.name
+                                            : 'Student',
+                                        style: base.copyWith(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      if (user.email.isNotEmpty)
+                                        Text(
+                                          user.email,
+                                          style: base.copyWith(
+                                            fontSize: 13,
+                                            color: muted,
+                                          ),
+                                        ),
+                                      Text(
+                                        [
+                                          '${user.totalChaptersDone} chapters',
+                                          if (user.isAdmin) 'admin',
+                                          if (isMe) 'you',
+                                        ].join(' · '),
+                                        style: base.copyWith(
+                                          fontSize: 13,
+                                          color: muted,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                                _AnalyticsRow(
-                                  label: 'Reports filed',
-                                  value: '${stats['totalReports'] ?? 0}',
-                                ),
-                                _AnalyticsRow(
-                                  label: 'Active today',
-                                  value: '${stats['activeToday'] ?? 0}',
-                                ),
+                                if (!isMe)
+                                  IconButton(
+                                    onPressed: () => _confirmDelete(user),
+                                    icon: const Icon(Icons.delete_outline),
+                                    color: Colors.red,
+                                    tooltip: 'Delete user',
+                                  ),
                               ],
                             ),
                           );
-                        },
-                      ),
+                        }),
+                      if (_users.length < _total)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Center(
+                            child: FilledButton.tonal(
+                              onPressed: _loadingMore ? null : _loadMore,
+                              child: Text(
+                                _loadingMore
+                                    ? 'Loading…'
+                                    : 'Load more',
+                              ),
+                            ),
+                          ),
+                        ),
                     ],
-                  );
-                },
-              ),
-      ),
-    );
-  }
-}
-
-class _AnalyticsRow extends StatelessWidget {
-  const _AnalyticsRow({required this.label, required this.value});
-
-  final String label, value;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final base = Theme.of(context).textTheme.bodyMedium!;
-    final muted = isDark ? JimColors.darkMuted : JimColors.muted;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: base.copyWith(fontSize: 15, color: muted, height: 1.45),
-            ),
-          ),
-          Text(
-            value,
-            style: base.copyWith(fontSize: 15, fontWeight: FontWeight.w600),
-          ),
-        ],
+                  ),
       ),
     );
   }

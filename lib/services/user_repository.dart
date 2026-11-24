@@ -2,101 +2,68 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/app_user.dart';
-import 'supabase_init.dart';
+import 'api_client.dart';
+import 'auth_service.dart';
 
-/// User profiles in the Supabase `users` table (row id = Auth uid).
+/// Per-user profile data, backed by the custom backend.
 ///
-/// All Supabase calls are guarded: while [SupabaseInit.isOnlineMode] is
-/// false, a local in-memory cache is used instead and methods never throw.
+/// A single user is fetched via GET /api/users/:id (email is hidden
+/// unless it is my own row or I am an admin) and cached per id, so
+/// the community feed does not hit the network on every rebuild.
+/// [userStream] emits the cached row once (or the fetch result);
+/// there is no Realtime users table to subscribe to.
+///
+/// The leaderboard comes from GET /api/leaderboard?range= (top 50;
+/// rows carry `score`). The weekly range counts milestones in the
+/// last 7 days, so it is a real activity leaderboard — not a
+/// snapshot of total chapters.
+///
+/// Follow and privacy are LOCAL-ONLY: the backend has no endpoint
+/// for them, so they live in the local cache and SharedPreferences
+/// ('followed-users-v1') and apply to the profile screen only.
 class UserRepository {
   UserRepository._();
 
   static final UserRepository instance = UserRepository._();
 
-  SupabaseClient get _db => SupabaseInit.client;
-
   final Map<String, AppUser> _localCache = {};
 
+  AppUser? currentUser() => AuthService.instance.currentUser;
+
+  /// The current user's id (the JWT uid), or null when not signed in.
+  /// There is no anonymous fallback id — the app shows the login
+  /// screen when there is no valid JWT.
+  String? currentUid() => AuthService.instance.currentUid;
+
+  /// Saves a profile row in the local cache only. There is no
+  /// profile-update endpoint on the backend, so this never writes
+  /// to the server.
   Future<void> saveUser(AppUser u) async {
     _localCache[u.id] = u;
-    if (!SupabaseInit.isOnlineMode) return;
-    try {
-      await _db.from('users').upsert({'id': u.id, ...u.toMap()});
-    } catch (_) {
-      // Offline/cache fallback: the local copy above is kept.
-    }
   }
 
-  Stream<AppUser?> userStream(String uid) {
-    if (!SupabaseInit.isOnlineMode) {
-      return Stream<AppUser?>.value(_localCache[uid]);
-    }
-    final controller = StreamController<AppUser?>();
-    var closed = false;
-    Future<void> emit() async {
-      try {
-        final user = await getUser(uid);
-        if (!closed) controller.add(user);
-      } catch (_) {
-        // Keep the stream alive; the next Realtime event retries.
-      }
-    }
-    unawaited(emit());
-    final channel = _db
-        .channel('public:users:$uid')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'users',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'id',
-            value: uid,
-          ),
-          callback: (_) => unawaited(emit()),
-        )
-        .subscribe();
-    controller.onCancel = () async {
-      closed = true;
-      await channel.unsubscribe();
-      await controller.close();
-    };
-    return controller.stream;
+  /// Emits the cached profile once (or the fetched one). No live
+  /// stream: the backend has no Realtime.
+  Stream<AppUser?> userStream(String uid) async* {
+    yield await getUser(uid);
   }
 
+  /// Fetches a user (cached per id). Offline / not signed in → the
+  /// local cache, or null.
   Future<AppUser?> getUser(String uid) async {
-    if (!SupabaseInit.isOnlineMode) return _localCache[uid];
+    final cached = _localCache[uid];
+    if (cached != null) return cached;
+    if (!AuthService.instance.isSignedIn) return null;
     try {
-      final row = await _db
-          .from('users')
-          .select()
-          .eq('id', uid)
-          .maybeSingle();
-      if (row == null) {
-        final cached = _localCache[uid];
-        if (cached != null) return cached;
-        // No row (local anonymous id): a photo saved on this device
-        // still counts, so the profile and message avatars show it.
-        try {
-          final prefs = await SharedPreferences.getInstance();
-          final url = prefs.getString(_localPhotoKey(uid));
-          if (url != null && url.isNotEmpty) {
-            final user = AppUser(
-              id: uid,
-              name: 'Student',
-              email: '',
-              photoUrl: url,
-            );
-            _localCache[uid] = user;
-            return user;
-          }
-        } catch (_) {}
-        return null;
-      }
-      final user = AppUser.fromMap(uid, row);
+      final res = await ApiClient.instance.get('/api/users/$uid', auth: true);
+      final map = res['user'] as Map?;
+      if (map == null) return null;
+      final user = AppUser.fromMap(
+        (map['id'] as String?) ?? uid,
+        map.cast<String, dynamic>(),
+      );
       _localCache[uid] = user;
       return user;
     } catch (_) {
@@ -104,34 +71,42 @@ class UserRepository {
     }
   }
 
-  /// Weekly top 10 by chapters finished.
-  ///
-  /// TODO: the "weekly" filter is not implemented yet — Supabase needs a
-  /// dedicated weekly counter field (e.g. `chapters_done_this_week` plus
-  /// a `week_start` timestamp, reset by a scheduled job / Edge Function).
-  /// Until that field exists this orders by the all-time
-  /// `chapters_done` count.
+  /// Weekly top 50 by milestones in the last 7 days. Offline → [].
   Future<List<AppUser>> leaderboardWeekly({int limit = 10}) async {
-    if (!SupabaseInit.isOnlineMode) {
-      final users = _localCache.values.toList()
-        ..sort((a, b) => b.totalChaptersDone.compareTo(a.totalChaptersDone));
-      return users.take(limit).toList();
-    }
+    final users = await _leaderboard(range: 'weekly');
+    return users.take(limit).toList();
+  }
+
+  Future<List<AppUser>> leaderboardAll({int limit = 10}) async {
+    final users = await _leaderboard(range: 'all');
+    return users.take(limit).toList();
+  }
+
+  Future<List<AppUser>> _leaderboard({required String range}) async {
     try {
-      final rows = await _db
-          .from('users')
-          .select()
-          .order('chapters_done', ascending: false)
-          .limit(limit);
-      return rows.map((row) {
-        final map = (row as Map).cast<String, dynamic>();
-        return AppUser.fromMap(map['id'] as String? ?? '', map);
-      }).toList();
+      final res = await ApiClient.instance.get(
+        '/api/leaderboard',
+        query: {'range': range},
+      );
+      final rows = (res['leaderboard'] as List?) ?? [];
+      return rows
+          .whereType<Map>()
+          .map((row) {
+            final map = row.cast<String, dynamic>();
+            return AppUser.fromMap(
+              (map['id'] as String?) ?? '',
+              map,
+            );
+          })
+          .where((u) => u.id.isNotEmpty)
+          .toList();
     } catch (_) {
       return [];
     }
   }
 
+  /// Follow is LOCAL-ONLY (no backend endpoint): [uid] follows
+  /// [targetUid] on this device.
   Future<void> follow(String uid, String targetUid) async {
     final me = _localCache[uid];
     if (me != null && !me.followingIds.contains(targetUid)) {
@@ -150,48 +125,46 @@ class UserRepository {
         followingIds: [...me.followingIds, targetUid],
       );
     }
-    if (!SupabaseInit.isOnlineMode) return;
     try {
-      final current = await getUser(uid);
-      final following = [...?current?.followingIds];
-      if (!following.contains(targetUid)) following.add(targetUid);
-      await _db.from('users').update({
-        'following_ids': following,
-      }).eq('id', uid);
+      final prefs = await SharedPreferences.getInstance();
+      final followed = (prefs.getStringList('followed-users-v1') ?? [])
+          .toSet();
+      followed.add(targetUid);
+      await prefs.setStringList('followed-users-v1', followed.toList());
     } catch (_) {
-      // Kept in the local cache above; syncs on the next saveUser.
+      // Best effort; the in-memory cache above is kept.
     }
   }
 
+  /// Privacy is LOCAL-ONLY (no backend endpoint): the update is
+  /// applied to the cached user and kept for this session.
   Future<void> updatePrivacy(
     String uid, {
     String? profileVisibility,
     String? photoVisibility,
   }) async {
-    if (!SupabaseInit.isOnlineMode) return;
-    try {
-      final updates = <String, dynamic>{};
-      if (profileVisibility != null) {
-        updates['privacy'] = profileVisibility;
-      }
-      if (photoVisibility != null) {
-        updates['photo_privacy'] = photoVisibility;
-      }
-      if (updates.isNotEmpty) {
-        await _db.from('users').update(updates).eq('id', uid);
-      }
-    } catch (_) {
-      // Privacy update is best effort; the local cache keeps the old value.
+    final me = _localCache[uid];
+    if (me != null) {
+      _localCache[uid] = AppUser(
+        id: me.id,
+        name: me.name,
+        email: me.email,
+        photoUrl: me.photoUrl,
+        coverUrl: me.coverUrl,
+        profileVisibility: profileVisibility ?? me.profileVisibility,
+        photoVisibility: photoVisibility ?? me.photoVisibility,
+        isAdmin: me.isAdmin,
+        streak: me.streak,
+        totalChaptersDone: me.totalChaptersDone,
+        milestoneIds: me.milestoneIds,
+        followingIds: me.followingIds,
+      );
     }
   }
 
-  /// SharedPreferences key holding the local profile photo for a uid
-  /// that has no `users` row (local anonymous ids have no auth row, so
-  /// the `users.id -> auth.users(id)` FK rejects an upsert for them).
-  /// The photo then lives on this device only — same honest limit as
-  /// the device-admin fallback — until a real account exists.
-  static String _localPhotoKey(String uid) => 'local-photo-url-$uid';
-
+  /// Updates the cached photo for [uid]. The server photo is set by
+  /// [uploadProfilePhoto] instead — this only refreshes the local
+  /// cache so avatars update immediately.
   Future<void> updatePhoto(String uid, String photoUrl) async {
     final current = _localCache[uid];
     if (current != null) {
@@ -210,42 +183,23 @@ class UserRepository {
         followingIds: current.followingIds,
       );
     }
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_localPhotoKey(uid), photoUrl);
-    } catch (_) {
-      // Local persistence is best effort.
-    }
-    if (!SupabaseInit.isOnlineMode) return;
-    try {
-      await _db.from('users').update({'photo_url': photoUrl}).eq('id', uid);
-    } catch (_) {
-      // Best effort; the local copy above is what the UI shows.
-    }
   }
 
-  /// Uploads a profile photo to the public `notes` bucket and returns
-  /// its public URL. Throws on failure so the caller can report it.
+  /// Uploads a profile photo via POST /api/upload?kind=profile and
+  /// returns its Blob URL. The server also stores the URL on the
+  /// user's row, so a GET /api/auth/me afterwards shows the new
+  /// photo. Throws [ApiException] when not signed in or offline.
   Future<String> uploadProfilePhoto(String uid, Uint8List bytes) async {
-    final path =
-        'profile/$uid/photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
-    await _db.storage.from('notes').uploadBinary(
-          path,
-          bytes,
-          fileOptions: const FileOptions(
-            contentType: 'image/jpeg',
-            upsert: true,
-          ),
-        );
-    return _db.storage.from('notes').getPublicUrl(path);
-  }
-
-  Future<void> updateCover(String uid, String coverUrl) async {
-    if (!SupabaseInit.isOnlineMode) return;
-    try {
-      await _db.from('users').update({'cover_url': coverUrl}).eq('id', uid);
-    } catch (_) {
-      // Best effort.
+    final res = await ApiClient.instance.uploadImage(
+      filename: 'profile_$uid.jpg',
+      kind: 'profile',
+      bytes: bytes,
+      contentType: 'image/jpeg',
+    );
+    final url = (res['url'] as String?) ?? '';
+    if (url.isEmpty) {
+      throw ApiException('SERVER_ERROR', 'Photo upload failed.');
     }
+    return url;
   }
 }

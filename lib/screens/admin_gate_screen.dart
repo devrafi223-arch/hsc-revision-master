@@ -4,11 +4,12 @@ import '../main.dart';
 import '../services/admin_service.dart';
 import '../services/auth_service.dart';
 import 'admin_screen.dart';
+import 'otp_screen.dart';
 
 /// The `/admin` route (web only): the admin panel, securely locked
-/// behind an email + password sign-in and a strict `users.is_admin`
-/// check. There is no entry to this page from the app UI — it only
-/// opens at the `/admin` URL.
+/// behind an email + 6-digit code sign-in and a strict
+/// `users.is_admin` check. There is no entry to this page from the
+/// app UI — it only opens at the `/admin` URL.
 class AdminGateScreen extends StatefulWidget {
   const AdminGateScreen({super.key});
 
@@ -18,7 +19,6 @@ class AdminGateScreen extends StatefulWidget {
 
 class _AdminGateScreenState extends State<AdminGateScreen> {
   final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
   bool _busy = false;
   bool _checking = true;
   bool _isAdmin = false;
@@ -33,19 +33,17 @@ class _AdminGateScreenState extends State<AdminGateScreen> {
   @override
   void dispose() {
     _emailController.dispose();
-    _passwordController.dispose();
     super.dispose();
   }
 
   /// A persisted admin session skips the form; a persisted non-admin
   /// session is signed out so the form starts clean.
   Future<void> _checkSession() async {
-    final uid = AuthService.instance.currentUid;
-    if (uid == null) {
+    if (!AuthService.instance.isSignedIn) {
       if (mounted) setState(() => _checking = false);
       return;
     }
-    final admin = await AdminService.instance.isAdmin(uid);
+    final admin = AdminService.instance.isAdmin();
     if (!mounted) return;
     if (!admin) {
       await AuthService.instance.signOut();
@@ -61,11 +59,23 @@ class _AdminGateScreenState extends State<AdminGateScreen> {
     });
   }
 
-  Future<void> _signIn() async {
+  /// After the code is verified: admins go in, everyone else is
+  /// signed straight back out.
+  Future<void> _afterVerified() async {
+    if (!AdminService.instance.isAdmin()) {
+      await AuthService.instance.signOut();
+      if (mounted) {
+        setState(() => _error = 'This account is not an admin.');
+      }
+      return;
+    }
+    if (mounted) setState(() => _isAdmin = true);
+  }
+
+  Future<void> _sendCode() async {
     final email = _emailController.text.trim();
-    final password = _passwordController.text;
-    if (email.isEmpty || password.isEmpty) {
-      setState(() => _error = 'Enter your admin email and password.');
+    if (email.isEmpty || !email.contains('@')) {
+      setState(() => _error = 'Enter a valid admin email address.');
       return;
     }
     setState(() {
@@ -73,26 +83,25 @@ class _AdminGateScreenState extends State<AdminGateScreen> {
       _error = null;
     });
     try {
-      await AuthService.instance.loginWithEmail(
-        email: email,
-        password: password,
-      );
-      final uid = AuthService.instance.currentUid;
-      if (uid == null) throw Exception('Sign-in failed.');
-      final admin = await AdminService.instance.isAdmin(uid);
-      if (!mounted) return;
-      if (!admin) {
-        await AuthService.instance.signOut();
-        setState(() => _error = 'This account is not an admin.');
-        return;
-      }
-      setState(() => _isAdmin = true);
+      await AuthService.instance.sendLoginCode(email: email);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = AuthService.friendlyError(e));
-    } finally {
-      if (mounted) setState(() => _busy = false);
+      setState(() {
+        _busy = false;
+        _error = AuthService.friendlyError(e);
+      });
+      return;
     }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => OtpScreen(
+          email: email,
+          onVerified: _afterVerified,
+        ),
+      ),
+    );
   }
 
   Future<void> _signOut() async {
@@ -101,7 +110,7 @@ class _AdminGateScreenState extends State<AdminGateScreen> {
     setState(() {
       _isAdmin = false;
       _error = null;
-      _passwordController.clear();
+      _emailController.clear();
     });
   }
 
@@ -139,7 +148,7 @@ class _AdminGateScreenState extends State<AdminGateScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Only the admin account can open this page. The panel is not linked from the app.',
+                  'Only the admin account can open this page. We will send a 6-digit code to your email. The panel is not linked from the app.',
                   style: base.copyWith(
                     fontSize: 14,
                     color: muted,
@@ -154,16 +163,7 @@ class _AdminGateScreenState extends State<AdminGateScreen> {
                     dark: isDark,
                     hint: 'Admin email',
                   ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _passwordController,
-                  obscureText: true,
-                  decoration: jimFieldDecoration(
-                    dark: isDark,
-                    hint: 'Password',
-                  ),
-                  onSubmitted: (_) => _signIn(),
+                  onSubmitted: (_) => _sendCode(),
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: 12),
@@ -174,7 +174,7 @@ class _AdminGateScreenState extends State<AdminGateScreen> {
                 ],
                 const SizedBox(height: 20),
                 FilledButton(
-                  onPressed: _busy ? null : _signIn,
+                  onPressed: _busy ? null : _sendCode,
                   child: _busy
                       ? const SizedBox(
                           width: 18,
@@ -184,7 +184,7 @@ class _AdminGateScreenState extends State<AdminGateScreen> {
                             color: Colors.white,
                           ),
                         )
-                      : const Text('Sign in'),
+                      : const Text('Send code'),
                 ),
               ],
             ),

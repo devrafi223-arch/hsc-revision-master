@@ -8,13 +8,13 @@ import 'package:hsc_revision_master/screens/auth_screen.dart';
 import 'package:hsc_revision_master/screens/home_screen.dart';
 import 'package:hsc_revision_master/screens/log_screen.dart';
 import 'package:hsc_revision_master/screens/otp_screen.dart';
-import 'package:hsc_revision_master/screens/reset_password_screen.dart';
 import 'package:hsc_revision_master/services/app_log.dart';
 import 'package:hsc_revision_master/widgets/pomodoro_timer.dart';
 
 /// Test harness mirroring HscRevisionApp's wiring: HomeScreen with a
-/// local night-mode toggle. The auth gate has no offline bypass
-/// anymore, so tests enter the tracker directly.
+/// local night-mode toggle. The harness renders HomeScreen directly,
+/// bypassing the login gate (the real app shows AuthScreen first when
+/// there is no valid JWT).
 class _TestApp extends StatefulWidget {
   const _TestApp();
 
@@ -227,14 +227,20 @@ void main() {
     );
     expect(find.text('Motivation'), findsOneWidget);
     await tester.tap(find.text('Community'));
-    await tester.pumpAndSettle();
+    // No pumpAndSettle here: the community feed polls the backend
+    // every 2.5 s, so the test harness never settles. A few bounded
+    // pumps are enough for the first (empty) feed to render.
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 3));
     // The Community tab has no AppBar of its own (the HomeScreen AppBar
     // stays on top), so 'Community' appears exactly once — the
     // NavigationBar destination label.
     expect(find.text('Community'), findsOneWidget);
     await tester.tap(find.text('Profile'));
     await tester.pumpAndSettle();
-    expect(find.text('You are not signed in.'), findsOneWidget);
+    // No guest mode: the profile tab routes to the login screen when
+    // nobody is signed in.
+    expect(find.text('Welcome back'), findsOneWidget);
     await tester.tap(find.text('All chapters'));
     await tester.pumpAndSettle();
     expect(find.text('Showing 151 of 151 chapters'), findsOneWidget);
@@ -265,11 +271,15 @@ void main() {
     expect(find.text('00:03'), findsOneWidget);
   });
 
-  testWidgets('Forgot password dialog opens and sends (offline: shows error)',
+  testWidgets('Auth screen sends a login code (shows the error dialog)',
       (tester) async {
-    // The auth gate has no offline bypass: in tests Supabase is not
-    // initialised, so sending shows the offline error inside the
-    // dialog instead of a success message.
+    // Login is email + 6-digit code now: no password, no Google, no
+    // forgot-password. flutter_test mocks every HttpClient to return
+    // an empty 400, so this test asserts the wiring (tap → service
+    // call → error dialog) rather than the live backend answer; the
+    // backend's own error codes are covered in auth_errors_test and
+    // were verified live with curl (400 EMAIL_DOMAIN_NOT_ALLOWED for
+    // example.com, 400 CODE_INVALID for verify-code with no code).
     await tester.pumpWidget(
       MaterialApp(
         theme: jimTheme(dark: false),
@@ -277,64 +287,31 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    // The form is a lazy ListView and the button starts below the
-    // fold, so scroll it into view first (the page ListView's
-    // Scrollable is the first one in the tree — the text fields own
-    // the others).
-    await tester.scrollUntilVisible(
-      find.text('Forgot password?'),
-      200,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Forgot password?'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Reset password'), findsOneWidget);
-    // Scope to the dialog: the login form behind it has an 'Email'
-    // field too.
     await tester.enterText(
-      find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.widgetWithText(TextField, 'Email'),
-      ),
+      find.widgetWithText(TextField, 'Email'),
       'student@example.com',
     );
-    await tester.tap(find.text('Send reset link'));
+    await tester.tap(find.text('Send code'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Online features'), findsOneWidget);
-  });
-
-  testWidgets('Reset password screen rejects mismatched passwords',
-      (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: jimTheme(dark: false),
-        home: ResetPasswordScreen(onDone: () {}),
+    expect(find.text('Something went wrong'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text(
+          'The server returned an unreadable response (400).',
+        ),
       ),
+      findsOneWidget,
     );
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.widgetWithText(TextField, 'New password'),
-      'newpass123',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Confirm new password'),
-      'different456',
-    );
-    await tester.tap(find.text('Save new password'));
-    await tester.pumpAndSettle();
-    expect(find.text('Passwords do not match'), findsOneWidget);
   });
 
-  testWidgets('OTP screen rejects a short code without calling Supabase',
+  testWidgets('OTP screen rejects a short code without calling the backend',
       (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         theme: jimTheme(dark: false),
         home: const OtpScreen(
           email: 'student@example.com',
-          purpose: OtpPurpose.signup,
         ),
       ),
     );
@@ -349,14 +326,17 @@ void main() {
         findsOneWidget);
   });
 
-  testWidgets('OTP screen sends a 6-digit code (offline: shows error)',
+  testWidgets('OTP screen verifies a 6-digit code (shows the error)',
       (tester) async {
+    // Same mock-400 note as the AuthScreen test above: this asserts
+    // the wiring (tap → service call → inline error), not the live
+    // answer. The live CODE_INVALID mapping is covered in
+    // auth_errors_test and verified with curl.
     await tester.pumpWidget(
       MaterialApp(
         theme: jimTheme(dark: false),
         home: const OtpScreen(
           email: 'student@example.com',
-          purpose: OtpPurpose.recovery,
         ),
       ),
     );
@@ -367,28 +347,9 @@ void main() {
     );
     await tester.tap(find.text('Verify code'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Online features'), findsOneWidget);
-  });
-
-  testWidgets('Reset password screen sends matching passwords (offline: error)',
-      (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: jimTheme(dark: false),
-        home: ResetPasswordScreen(onDone: () {}),
-      ),
+    expect(
+      find.text('The server returned an unreadable response (400).'),
+      findsOneWidget,
     );
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.widgetWithText(TextField, 'New password'),
-      'newpass123',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Confirm new password'),
-      'newpass123',
-    );
-    await tester.tap(find.text('Save new password'));
-    await tester.pumpAndSettle();
-    expect(find.text('Something went wrong'), findsOneWidget);
   });
 }

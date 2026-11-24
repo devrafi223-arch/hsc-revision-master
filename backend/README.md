@@ -78,6 +78,8 @@ every 2–3 s with `since` = newest `created_at` it has. First load (no
 | `POST /api/milestones` | JWT | `{chapter_id, subject}` — once per chapter |
 | `GET /api/admin/users` | admin | paginated user list |
 | `POST /api/upload?filename=&kind=profile\|note` | JWT | raw image body, max 4 MB; 501 if Blob not connected |
+| `GET /api/presence` | — | users seen in the last 5 min (`{online: [...]}`) |
+| `POST /api/presence` | JWT | heartbeat — marks this user seen now |
 
 All responses: `{ok: true, ...}` or `{ok: false, error: CODE, message}`.
 

@@ -2,12 +2,10 @@ import 'dart:async';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'supabase_init.dart';
-
 /// Push / reminders + in-app milestone notifications.
 ///
-/// Supabase has NO FCM: there is no server push in this app. Push is a
-/// LOCAL-REMINDER STUB instead:
+/// The custom backend has NO push: there is no server push in this app.
+/// Push is a LOCAL-REMINDER STUB instead:
 ///   * [notifyMilestone] pushes the milestone name onto
 ///     [milestoneNotifications], which the UI listens to and shows as a
 ///     local in-app notification (banner/confetti — the UI agent owns
@@ -17,10 +15,10 @@ import 'supabase_init.dart';
 ///     [dailyReminders], which the UI shows in-app.
 ///
 /// TODO: real push to OTHER devices (a daily revision reminder, a daily
-/// motivation quote, or a friend's milestone) needs Supabase Edge Function
-/// + FCM server key for real push. A push cannot be sent from the app
-/// itself without exposing the server key, so this service deliberately
-/// does NOT fake a server send.
+/// motivation quote, or a friend's milestone) needs a Vercel cron /
+/// Edge Function + FCM server key for real push. A push cannot be sent
+/// from the app itself without exposing the server key, so this service
+/// deliberately does NOT fake a server send.
 class MessagingService {
   static final StreamController<String> _milestoneController =
       StreamController<String>.broadcast();
@@ -39,10 +37,9 @@ class MessagingService {
   static const String reminderTimeKey = 'daily-reminder-time-v1';
 
   /// No-op setup. Never throws. There is no FCM token to fetch — see
-  /// the class doc: real push needs a server (Edge Function + FCM key).
+  /// the class doc: real push needs a server (Vercel cron + FCM key).
   static Future<void> init() async {
-    if (!SupabaseInit.isOnlineMode) return;
-    // Nothing to register: Supabase has no client push SDK.
+    // Nothing to register: the custom backend has no client push SDK.
   }
 
   /// Announces a newly earned milestone inside the app.
@@ -54,9 +51,9 @@ class MessagingService {
 
   /// Stores the daily revision reminder time (hour/minute) on this device.
   /// This only records the preference — actually firing at that time needs
-  /// Supabase Edge Function + FCM server key for real push (see class
-  /// doc); until then the UI can call [notifyDailyReminder] itself, e.g.
-  /// when the app is opened in the morning.
+  /// a Vercel cron / Edge Function + FCM server key for real push (see
+  /// class doc); until then the UI can call [notifyDailyReminder] itself,
+  /// e.g. when the app is opened in the morning.
   static Future<void> scheduleDailyReminder({
     required int hour,
     required int minute,

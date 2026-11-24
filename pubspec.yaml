@@ -1,7 +1,7 @@
 name: hsc_revision_master
 description: "HSC Science Revision Master — soft, phone-first tracker. 7 subjects, 151 chapters, 906 milestones."
 publish_to: "none"
-version: 3.0.10+13
+version: 3.0.11+14
 
 environment:
   sdk: ^3.5.0
@@ -13,11 +13,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   shared_preferences: ^2.3.0
   path_provider: ^2.1.0
-  # --- v3 online features (Supabase backend) ---
-  supabase_flutter: 2.18.3
+  # --- v3 online features (custom Vercel backend) ---
   image_picker: ^1.2.0
   connectivity_plus: ^7.0.0
-  # --- v3 security: TLS CA pinning + encrypted session storage ---
+  # --- v3 security: encrypted JWT storage (platform TLS, no pinning) ---
   http: ^1.2.0
   flutter_secure_storage: ^9.2.4
 

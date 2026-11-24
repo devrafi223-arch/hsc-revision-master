@@ -1,30 +1,48 @@
 import 'dart:async';
-import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/community_message.dart';
+import 'api_client.dart';
 import 'auth_service.dart';
 import 'moderation.dart';
 import 'offline_queue.dart';
-import 'supabase_init.dart';
-import 'user_repository.dart';
 
-/// Universal community (groupId == null) + group chats (groupId set).
-/// Supabase table `messages`; polls live in the `polls` table and are
-/// attached to their message when read.
+/// Universal community feed, backed by the custom backend (REST).
 ///
-/// Moderation: [Moderation.isFlagged] runs on every text/photo message.
-/// A flagged message is stored with flagged=true and its text replaced by
-/// 'Removed by moderation'; the original text is kept ONLY in the local
-/// offline queue under 'flaggedOriginal' and is never uploaded.
+/// Reading: [messagesStream] polls GET /api/messages?since= every
+/// 2.5 s (no WebSocket on Vercel serverless — see backend/README.md)
+/// and does a full refresh every 30 s, so reactions, pins and flags
+/// on old messages arrive too. Polls are joined from GET /api/polls
+/// on every tick.
 ///
-/// Offline: writes are enqueued into [OfflineQueue] and persisted as JSON
-/// in SharedPreferences under key 'offline-queue-v1'; [SyncService] replays
-/// them when the device is back online.
+/// Writing needs a JWT: the server sets the author name from the
+/// signed-in user. A write with no/invalid token throws
+/// `ApiException(UNAUTHORIZED)` — the caller shows "please log in"
+/// (the app root signs the user out on a 401). A write that fails
+/// with NETWORK is enqueued into [OfflineQueue] and replayed by
+/// [SyncService] when the device is back online.
+///
+/// Moderation: [Moderation.isFlagged] runs on every text message. A
+/// flagged message is stored with its text replaced by
+/// 'Removed by moderation'; the original text is kept ONLY in the
+/// local offline queue under 'flaggedOriginal' and is never uploaded.
+///
+/// Photos: the backend has no photo column, so a photo message is
+/// stored as a message whose text IS the Blob image URL (uploaded
+/// first via POST /api/upload?kind=note). [CommunityMessage.fromMap]
+/// renders that back as a photo.
+///
+/// Voice messages are gone: recording was a UI stub and the backend
+/// has no audio storage. The composer mic button shows "coming soon".
+///
+/// Anonymous posting is gone too: the backend always records the JWT
+/// user's name — every message shows its author.
+///
+/// Blocking is LOCAL-ONLY now (no backend endpoint): blocked author
+/// ids live in SharedPreferences under 'blocked-users-v1' and their
+/// messages are filtered out of the feed on this device.
 ///
 /// Bookmarks are LOCAL ONLY (a Set of message ids in SharedPreferences
 /// under 'bookmarked-messages-v1'): there is no bookmark column in the
@@ -41,11 +59,8 @@ class CommunityService {
   /// SharedPreferences key holding the local bookmarked message ids.
   static const String bookmarksKey = 'bookmarked-messages-v1';
 
-  /// Storage bucket for community photos / voice messages. The schema
-  /// documents a single public bucket named 'notes' (see supabase/schema.sql).
-  static const String _storageBucket = 'notes';
-
-  SupabaseClient get _db => SupabaseInit.client;
+  /// SharedPreferences key holding the locally blocked author ids.
+  static const String blockedKey = 'blocked-users-v1';
 
   /// Notifies live streams when a local-only change (e.g. a bookmark
   /// toggle) happens, so they re-emit with the merged local state.
@@ -66,10 +81,6 @@ class CommunityService {
   static Future<void> persistQueue(OfflineQueue queue) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(queueKey, queue.toJson());
-  }
-
-  Future<void> _enqueue(Map<String, dynamic> op) async {
-    await enqueueOp(op);
   }
 
   /// Enqueues one op into the shared offline queue (persisted as JSON).
@@ -107,161 +118,202 @@ class CommunityService {
     }
   }
 
-  // -- helpers ----------------------------------------------------------
+  // -- local blocks -------------------------------------------------------
 
-  Future<(String, String)> _author() async {
-    final uid = AuthService.instance.effectiveUid ?? 'anonymous';
-    var name = 'Student';
+  Set<String> _blockedIds = {};
+  bool _blockedLoaded = false;
+
+  Future<void> _loadBlocked() async {
+    if (_blockedLoaded) return;
     try {
-      final user = await UserRepository.instance.getUser(uid);
-      if (user != null && user.name.isNotEmpty) name = user.name;
+      final prefs = await SharedPreferences.getInstance();
+      _blockedIds = (prefs.getStringList(blockedKey) ?? []).toSet();
     } catch (_) {
-      // Name lookup is best effort.
+      _blockedIds = {};
     }
-    return (uid, name);
+    _blockedLoaded = true;
   }
 
-  String _newId() =>
-      'local-${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(1 << 32)}';
-
-  Future<String> _uploadBytes({
-    required Uint8List bytes,
-    required String storagePath,
-    required String contentType,
-  }) async {
-    await _db.storage.from(_storageBucket).uploadBinary(
-          storagePath,
-          bytes,
-          fileOptions: FileOptions(contentType: contentType, upsert: true),
-        );
-    return _db.storage.from(_storageBucket).getPublicUrl(storagePath);
+  Future<void> _persistBlocked() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(blockedKey, _blockedIds.toList());
+    } catch (_) {
+      // Best effort; the in-memory set is kept.
+    }
   }
 
-  /// Reads the latest messages from Supabase (oldest first — ordered by
-  /// `created_at` ascending), attaches each message's poll row, and merges
-  /// the local bookmark set into `bookmarkedBy`.
-  Future<List<CommunityMessage>> _fetchMessages({String? groupId}) async {
-    await _loadBookmarks();
-    final uid = AuthService.instance.effectiveUid;
-    final query = _db.from('messages').select();
-    // Filters go BEFORE order/limit: select() returns a FilterBuilder
-    // (eq/isFilter live there); order()/limit() return a TransformBuilder.
-    final List<dynamic> rows;
-    if (groupId == null) {
-      rows = await query
-          .isFilter('group_id', null)
-          .order('created_at', ascending: true)
-          .limit(100);
-    } else {
-      rows = await query
-          .eq('group_id', groupId)
-          .order('created_at', ascending: true)
-          .limit(100);
-    }
-    final maps = rows
-        .whereType<Map>()
-        .map((row) => row.cast<String, dynamic>())
-        .toList();
+  // -- polling state ------------------------------------------------------
 
-    // Attach polls: one `polls` row per poll message, keyed by message_id.
-    if (maps.isNotEmpty) {
-      final ids = maps.map((m) => m['id'].toString()).toList();
-      try {
-        final pollRows = await _db
-            .from('polls')
-            .select()
-            .inFilter('message_id', ids);
-        final byMessage = <String, Map<String, dynamic>>{};
-        for (final row in (pollRows as List).whereType<Map>()) {
+  static const _pollInterval = Duration(milliseconds: 2500);
+  static const _fullRefreshInterval = Duration(seconds: 30);
+
+  List<CommunityMessage> _cached = [];
+  String? _newestCreatedAt;
+  DateTime _lastFullFetch = DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _forceFullRefresh() {
+    _lastFullFetch = DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  /// Fetches the current polls once (joined onto messages by poll_id).
+  Future<Map<String, PollData>> _fetchPolls() async {
+    final byId = <String, PollData>{};
+    try {
+      final res = await ApiClient.instance.get(
+        '/api/polls',
+        query: {'limit': '50'},
+      );
+      for (final row in (res['polls'] as List?) ?? []) {
+        if (row is Map) {
           final map = row.cast<String, dynamic>();
-          byMessage[(map['message_id'] as Object?)?.toString() ?? ''] = {
-            'id': map['id'],
-            'question': map['question'],
-            'options': map['options'],
-            'votes': map['votes'],
-          };
+          final id = (map['id'] as String?) ?? '';
+          if (id.isNotEmpty) byId[id] = PollData.fromMap(map);
         }
-        for (final m in maps) {
-          final poll = byMessage[m['id'].toString()];
-          if (poll != null) m['poll'] = poll;
-        }
-      } catch (_) {
-        // Polls are best effort; messages still show without them.
+      }
+    } catch (_) {
+      // Polls are best effort; messages still show without them.
+    }
+    return byId;
+  }
+
+  List<CommunityMessage> _parseMessages(
+    List<dynamic> rows,
+    Map<String, PollData> pollsById,
+  ) {
+    final messages = <CommunityMessage>[];
+    for (final row in rows) {
+      if (row is! Map) continue;
+      final map = row.cast<String, dynamic>();
+      final pollId = map['poll_id'] as String?;
+      if (pollId != null && pollsById.containsKey(pollId)) {
+        map['poll'] = pollsById[pollId]!.toMap();
+      }
+      messages.add(
+        CommunityMessage.fromMap((map['id'] as String?) ?? '', map),
+      );
+    }
+    return messages;
+  }
+
+  /// Full fetch: the latest 100 messages, oldest first. Resets the
+  /// cache, the newest-created_at watermark and the full-fetch clock.
+  Future<List<CommunityMessage>> _fetchAll() async {
+    await _loadBookmarks();
+    await _loadBlocked();
+    final pollsById = await _fetchPolls();
+    final res = await ApiClient.instance.get(
+      '/api/messages',
+      query: {'limit': '100'},
+    );
+    final rows = (res['messages'] as List?) ?? [];
+    _cached = _parseMessages(rows, pollsById);
+    if (rows.isNotEmpty) {
+      final last = rows.last;
+      if (last is Map) {
+        _newestCreatedAt = (last['created_at'] as String?) ?? _newestCreatedAt;
       }
     }
+    _lastFullFetch = DateTime.now();
+    return _applyLocalState(_cached);
+  }
 
-    final messages = maps
-        .map((m) => CommunityMessage.fromMap(m['id'].toString(), m))
-        .toList();
-    if (uid == null) return messages;
-    // Merge local bookmarks so `message.bookmarkedBy` reflects this
-    // device's bookmark set (bookmarks are local-only, see class doc).
-    return messages
-        .map(
-          (m) => _bookmarkedIds.contains(m.id)
-              ? CommunityMessage(
-                  id: m.id,
-                  authorId: m.authorId,
-                  authorName: m.authorName,
-                  authorPhoto: m.authorPhoto,
-                  text: m.text,
-                  photoUrl: m.photoUrl,
-                  voiceUrl: m.voiceUrl,
-                  replyToId: m.replyToId,
-                  replyToText: m.replyToText,
-                  type: m.type,
-                  timestamp: m.timestamp,
-                  poll: m.poll,
-                  pinned: m.pinned,
-                  reactions: m.reactions,
-                  bookmarkedBy: [uid],
-                  flagged: m.flagged,
-                  flagReason: m.flagReason,
-                  groupId: m.groupId,
-                  isAnonymous: m.isAnonymous,
-                )
-              : m,
-        )
-        .toList();
+  /// Incremental fetch: only messages newer than [_newestCreatedAt].
+  /// Merges them into the cache (by id) and returns the merged list.
+  Future<List<CommunityMessage>> _fetchSince() async {
+    final since = _newestCreatedAt;
+    if (since == null) return _fetchAll();
+    final pollsById = await _fetchPolls();
+    final res = await ApiClient.instance.get(
+      '/api/messages',
+      query: {'since': since, 'limit': '100'},
+    );
+    final rows = (res['messages'] as List?) ?? [];
+    if (rows.isEmpty) return _applyLocalState(_cached);
+    final fresh = _parseMessages(rows, pollsById);
+    final byId = {for (final m in _cached) m.id: m};
+    for (final m in fresh) {
+      byId[m.id] = m;
+    }
+    _cached = byId.values.toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final last = rows.last;
+    if (last is Map) {
+      _newestCreatedAt = (last['created_at'] as String?) ?? _newestCreatedAt;
+    }
+    return _applyLocalState(_cached);
+  }
+
+  /// One poll tick: full refresh when due (or on first load),
+  /// incremental fetch otherwise.
+  Future<List<CommunityMessage>> _pollOnce() async {
+    if (_cached.isEmpty ||
+        DateTime.now().difference(_lastFullFetch) > _fullRefreshInterval) {
+      return _fetchAll();
+    }
+    return _fetchSince();
+  }
+
+  /// Merges the local bookmark set into [messages] and drops messages
+  /// from locally blocked authors.
+  List<CommunityMessage> _applyLocalState(List<CommunityMessage> messages) {
+    final uid = AuthService.instance.currentUid;
+    return messages.where((m) => !_blockedIds.contains(m.authorId)).map(
+      (m) {
+        if (uid == null || !_bookmarkedIds.contains(m.id)) return m;
+        return CommunityMessage(
+          id: m.id,
+          authorId: m.authorId,
+          authorName: m.authorName,
+          authorPhoto: m.authorPhoto,
+          text: m.text,
+          photoUrl: m.photoUrl,
+          voiceUrl: m.voiceUrl,
+          replyToId: m.replyToId,
+          replyToText: m.replyToText,
+          type: m.type,
+          timestamp: m.timestamp,
+          poll: m.poll,
+          pinned: m.pinned,
+          reactions: m.reactions,
+          reactionUsers: m.reactionUsers,
+          bookmarkedBy: [uid],
+          flagged: m.flagged,
+          flagReason: m.flagReason,
+          groupId: m.groupId,
+        );
+      },
+    ).toList();
   }
 
   // -- reading ----------------------------------------------------------
 
-  /// Oldest first (ordered by `created_at` ascending). Offline → an empty
+  /// Oldest first (chronological — newest at the bottom). The stream
+  /// polls the backend every 2.5 s; a failed tick keeps the last list
+  /// and retries on the next tick. Offline on first load → an empty
   /// list (queued messages live in the offline queue until they sync).
-  ///
-  /// NOTE: the old Firestore version returned newest-first; this version
-  /// returns chronological order (oldest at the top, newest at the bottom),
-  /// as the Supabase migration spec requires. Screens showing the feed
-  /// may want to scroll to the bottom on new messages.
-  Stream<List<CommunityMessage>> messagesStream({String? groupId}) {
-    if (!SupabaseInit.isOnlineMode) return Stream.value([]);
+  Stream<List<CommunityMessage>> messagesStream() {
     final controller = StreamController<List<CommunityMessage>>();
     var closed = false;
+    Timer? timer;
     Future<void> emit() async {
       try {
-        final messages = await _fetchMessages(groupId: groupId);
+        final messages = await _pollOnce();
         if (!closed) controller.add(messages);
       } catch (_) {
-        // Keep the stream alive; the next Realtime event retries.
+        // Keep the stream alive; the next tick retries. On first load
+        // with nothing cached, emit empty so the UI stops spinning.
+        if (!closed && _cached.isEmpty) controller.add([]);
       }
     }
 
     unawaited(emit());
-    final channel = _db
-        .channel('public:messages:${groupId ?? 'all'}')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'messages',
-          callback: (_) => unawaited(emit()),
-        )
-        .subscribe();
+    timer = Timer.periodic(_pollInterval, (_) => unawaited(emit()));
     final localSub = _localChanges.stream.listen((_) => unawaited(emit()));
     controller.onCancel = () async {
       closed = true;
+      timer?.cancel();
       await localSub.cancel();
-      await channel.unsubscribe();
       await controller.close();
     };
     return controller.stream;
@@ -269,221 +321,157 @@ class CommunityService {
 
   // -- sending ----------------------------------------------------------
 
-  Future<void> sendText(
+  /// Posts one text message. NETWORK failure → queued for SyncService;
+  /// UNAUTHORIZED → the session is dead (signs out, rethrows).
+  Future<void> _postText(
     String text, {
-    String? groupId,
-    bool anonymous = false,
+    String? replyToId,
+    String? replyToText,
+    String? pollId,
   }) async {
-    final (uid, name) = await _author();
     final flagged = Moderation.isFlagged(text);
     final reason = flagged ? Moderation.flagReason(text) : null;
     final storedText = flagged ? 'Removed by moderation' : text;
-
-    if (!SupabaseInit.isOnlineMode) {
-      final op = <String, dynamic>{
-        'type': 'message',
-        'messageType': 'text',
-        'text': storedText,
-        'authorId': uid,
-        'authorName': name,
-        'groupId': groupId,
-        'flagged': flagged,
-        'flagReason': reason,
-        'isAnonymous': anonymous,
-      };
-      // Original text lives ONLY in the local queue, never uploaded.
-      if (flagged) op['flaggedOriginal'] = text;
-      await _enqueue(op);
-      return;
+    try {
+      await ApiClient.instance.post(
+        '/api/messages',
+        auth: true,
+        body: {
+          'text': storedText,
+          if (replyToId != null) 'reply_to_id': replyToId,
+          if (replyToText != null) 'reply_to_text': replyToText,
+          if (pollId != null) 'poll_id': pollId,
+        },
+      );
+    } on ApiException catch (e) {
+      if (e.code == 'NETWORK') {
+        final op = <String, dynamic>{
+          'type': 'message',
+          'messageType': 'text',
+          'text': storedText,
+          'flagged': flagged,
+          'flagReason': reason,
+          if (replyToId != null) 'replyToId': replyToId,
+          if (replyToText != null) 'replyToText': replyToText,
+          if (pollId != null) 'pollId': pollId,
+        };
+        // Original text lives ONLY in the local queue, never uploaded.
+        if (flagged) op['flaggedOriginal'] = text;
+        await enqueueOp(op);
+        return;
+      }
+      if (e.code == 'UNAUTHORIZED') {
+        await AuthService.instance.signOut();
+      }
+      rethrow;
     }
-
-    await _db.from('messages').insert({
-      'author_id': uid,
-      'author_name': name,
-      'body': storedText,
-      'type': 'text',
-      'pinned': false,
-      'reactions': <String, int>{},
-      'flagged': flagged,
-      'flag_reason': reason,
-      'group_id': groupId,
-      'is_anonymous': anonymous,
-    });
     // Refresh the feed right away: without this the sent message only
-    // appears when a Realtime event arrives (and never, if Realtime is
-    // off for the messages table — the "chat issue", 2026-11-23).
+    // appears on the next 2.5 s tick.
     _notifyLocalChange();
   }
 
-  Future<void> sendPhoto(
-    String localPath, {
-    String? groupId,
-    bool anonymous = false,
-  }) async {
-    final (uid, name) = await _author();
-    if (!SupabaseInit.isOnlineMode) {
-      await _enqueue({
-        'type': 'message',
-        'messageType': 'photo',
-        'localPath': localPath,
-        'authorId': uid,
-        'authorName': name,
-        'groupId': groupId,
-        'isAnonymous': anonymous,
-      });
-      return;
-    }
+  Future<void> sendText(String text) async {
+    await _postText(text);
+  }
+
+  /// Uploads a photo to Blob, then posts a message whose text IS the
+  /// image URL (see the class doc). NETWORK failure → queued.
+  Future<void> sendPhoto(String localPath) async {
     final bytes = await XFile(localPath).readAsBytes();
-    final url = await _uploadBytes(
-      bytes: bytes,
-      storagePath:
-          'community/$uid/${DateTime.now().millisecondsSinceEpoch}.jpg',
-      contentType: 'image/jpeg',
-    );
-    await _db.from('messages').insert({
-      'author_id': uid,
-      'author_name': name,
-      'photo_url': url,
-      'type': 'photo',
-      'pinned': false,
-      'reactions': <String, int>{},
-      'flagged': false,
-      'group_id': groupId,
-      'is_anonymous': anonymous,
-    });
-    _notifyLocalChange();
+    final name =
+        'photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    late final String url;
+    try {
+      final res = await ApiClient.instance.uploadImage(
+        filename: name,
+        kind: 'note',
+        bytes: bytes,
+        contentType: 'image/jpeg',
+      );
+      url = (res['url'] as String?) ?? '';
+    } on ApiException catch (e) {
+      if (e.code == 'NETWORK') {
+        await enqueueOp({
+          'type': 'message',
+          'messageType': 'photo',
+          'localPath': localPath,
+        });
+        return;
+      }
+      if (e.code == 'UNAUTHORIZED') {
+        await AuthService.instance.signOut();
+      }
+      rethrow;
+    }
+    if (url.isEmpty) {
+      throw ApiException('SERVER_ERROR', 'Photo upload failed.');
+    }
+    await _postText(url);
   }
 
-  Future<void> sendVoice(
-    String localPath,
-    int seconds, {
-    String? groupId,
-    bool anonymous = false,
-  }) async {
-    final (uid, name) = await _author();
-    if (!SupabaseInit.isOnlineMode) {
-      await _enqueue({
-        'type': 'message',
-        'messageType': 'voice',
-        'localPath': localPath,
-        'seconds': seconds,
-        'authorId': uid,
-        'authorName': name,
-        'groupId': groupId,
-        'isAnonymous': anonymous,
-      });
-      return;
+  /// Creates the poll, then posts a message linking it (the message
+  /// text is the question). The poll card is joined client-side from
+  /// GET /api/polls.
+  Future<void> sendPoll(String question, List<String> options) async {
+    late final String pollId;
+    try {
+      final res = await ApiClient.instance.post(
+        '/api/polls',
+        auth: true,
+        body: {'question': question, 'options': options},
+      );
+      final poll = res['poll'] as Map?;
+      pollId = (poll?['id'] as String?) ?? '';
+    } on ApiException catch (e) {
+      if (e.code == 'NETWORK') {
+        await enqueueOp({
+          'type': 'message',
+          'messageType': 'poll',
+          'poll': {
+            'question': question,
+            'options': options,
+          },
+        });
+        return;
+      }
+      if (e.code == 'UNAUTHORIZED') {
+        await AuthService.instance.signOut();
+      }
+      rethrow;
     }
-    final bytes = await XFile(localPath).readAsBytes();
-    final url = await _uploadBytes(
-      bytes: bytes,
-      storagePath:
-          'community/voice/$uid/${DateTime.now().millisecondsSinceEpoch}.m4a',
-      contentType: 'audio/m4a',
-    );
-    await _db.from('messages').insert({
-      'author_id': uid,
-      'author_name': name,
-      'voice_url': url,
-      'body': 'Voice message ($seconds s)',
-      'type': 'voice',
-      'pinned': false,
-      'reactions': <String, int>{},
-      'flagged': false,
-      'group_id': groupId,
-      'is_anonymous': anonymous,
-    });
-    _notifyLocalChange();
-  }
-
-  Future<void> sendPoll(
-    String question,
-    List<String> options, {
-    String? groupId,
-    bool anonymous = false,
-  }) async {
-    final (uid, name) = await _author();
-    final poll = PollData(
-      id: _newId(),
-      question: question,
-      options: options,
-    );
-    if (!SupabaseInit.isOnlineMode) {
-      await _enqueue({
-        'type': 'message',
-        'messageType': 'poll',
-        'poll': poll.toMap(),
-        'authorId': uid,
-        'authorName': name,
-        'groupId': groupId,
-        'isAnonymous': anonymous,
-      });
-      return;
+    if (pollId.isEmpty) {
+      throw ApiException('SERVER_ERROR', 'Could not create the poll.');
     }
-    final messageRow = await _db
-        .from('messages')
-        .insert({
-          'author_id': uid,
-          'author_name': name,
-          'type': 'poll',
-          'pinned': false,
-          'reactions': <String, int>{},
-          'flagged': false,
-          'group_id': groupId,
-          'is_anonymous': anonymous,
-        })
-        .select('id')
-        .single();
-    final messageId = (messageRow['id'] as Object?)?.toString();
-    if (messageId == null) return;
-    final pollRow = await _db
-        .from('polls')
-        .insert({
-          'message_id': messageId,
-          'question': question,
-          'options': options,
-          'votes': <String, int>{},
-        })
-        .select('id')
-        .single();
-    final pollId = (pollRow['id'] as Object?)?.toString();
-    if (pollId != null) {
-      await _db
-          .from('messages')
-          .update({'poll_id': pollId})
-          .eq('id', messageId);
-    }
-    _notifyLocalChange();
+    await _postText(question, pollId: pollId);
   }
 
   // -- interactions -----------------------------------------------------
 
-  /// One vote per user: the `polls` row's `votes` map is updated with
-  /// votes[currentUid] = optionIndex, overwriting any previous vote.
-  Future<void> vote(String messageId, int optionIndex) async {
-    final uid = AuthService.instance.effectiveUid;
-    if (uid == null || !SupabaseInit.isOnlineMode) return;
+  /// One vote per user: the backend removes the user from every other
+  /// option first, so a re-vote moves the vote instead of doubling it.
+  /// [pollId] is the poll's id (not the message id).
+  Future<void> vote(String pollId, int optionIndex) async {
+    if (pollId.isEmpty) return;
     try {
-      final pollRow = await _db
-          .from('polls')
-          .select('id, votes')
-          .eq('message_id', messageId)
-          .maybeSingle();
-      if (pollRow == null) return;
-      final votes = Map<String, dynamic>.from(pollRow['votes'] as Map? ?? {});
-      votes[uid] = optionIndex;
-      await _db
-          .from('polls')
-          .update({'votes': votes})
-          .eq('id', pollRow['id']);
+      await ApiClient.instance.post(
+        '/api/polls/$pollId/vote',
+        auth: true,
+        body: {'option_index': optionIndex},
+      );
+      _forceFullRefresh();
       _notifyLocalChange();
-    } catch (_) {
-      // Best effort; the stream re-emits the stored votes on next load.
+    } on ApiException catch (e) {
+      if (e.code == 'UNAUTHORIZED') {
+        await AuthService.instance.signOut();
+      }
+      rethrow;
     }
   }
 
   /// Toggles [uid]'s reaction for [emoji] inside a stored `reactions`
-  /// map and returns the new map. Pure, so it is unit-tested.
+  /// map and returns the new map. Pure, so it is unit-tested. Used for
+  /// the optimistic update in [react]; the server is the source of
+  /// truth (POST /api/messages/:id/react toggles server-side too).
   ///
   /// New shape: `reactions[emoji]` is the list of reactor uids, so the
   /// count is the list length and a second tap removes the user again.
@@ -516,78 +504,103 @@ class CommunityService {
   /// first tap adds it, second tap removes it again. One user can
   /// only ever hold one reaction per emoji.
   Future<void> react(String messageId, String emoji) async {
-    final uid = AuthService.instance.effectiveUid;
-    if (uid == null || !SupabaseInit.isOnlineMode) return;
-    try {
-      final row = await _db
-          .from('messages')
-          .select('reactions')
-          .eq('id', messageId)
-          .maybeSingle();
-      if (row == null) return;
-      final reactions =
-          Map<String, dynamic>.from(row['reactions'] as Map? ?? {});
-      await _db.from('messages').update(
-        {'reactions': toggleReactionIn(reactions, emoji, uid)},
-      ).eq('id', messageId);
-      // Refresh the feed right away, like the other writes: without
-      // this the count only moves when a Realtime event arrives.
+    final uid = AuthService.instance.currentUid;
+    if (uid == null) {
+      throw ApiException('UNAUTHORIZED', 'Please log in to continue.');
+    }
+    // Optimistic: flip it in the cache now, the server confirms it
+    // on the next full refresh.
+    final index = _cached.indexWhere((m) => m.id == messageId);
+    CommunityMessage? optimistic;
+    if (index != -1) {
+      final m = _cached[index];
+      final reactions = toggleReactionIn(
+        {for (final e in m.reactionUsers.entries) e.key: e.value},
+        emoji,
+        uid,
+      );
+      final users = <String, List<String>>{};
+      final counts = <String, int>{};
+      for (final e in reactions.entries) {
+        if (e.value is List) {
+          final list = (e.value as List).map((v) => v.toString()).toList();
+          users[e.key] = list;
+          counts[e.key] = list.length;
+        }
+      }
+      optimistic = CommunityMessage(
+        id: m.id,
+        authorId: m.authorId,
+        authorName: m.authorName,
+        authorPhoto: m.authorPhoto,
+        text: m.text,
+        photoUrl: m.photoUrl,
+        voiceUrl: m.voiceUrl,
+        replyToId: m.replyToId,
+        replyToText: m.replyToText,
+        type: m.type,
+        timestamp: m.timestamp,
+        poll: m.poll,
+        pinned: m.pinned,
+        reactions: counts,
+        reactionUsers: users,
+        bookmarkedBy: m.bookmarkedBy,
+        flagged: m.flagged,
+        flagReason: m.flagReason,
+        groupId: m.groupId,
+      );
+      _cached[index] = optimistic;
       _notifyLocalChange();
-    } catch (_) {
-      // Best effort.
+    }
+    try {
+      await ApiClient.instance.post(
+        '/api/messages/$messageId/react',
+        auth: true,
+        body: {'emoji': emoji},
+      );
+      _forceFullRefresh();
+      _notifyLocalChange();
+    } on ApiException catch (e) {
+      // Roll the optimistic flip back on failure.
+      if (index != -1 && optimistic != null) {
+        _forceFullRefresh();
+        _notifyLocalChange();
+      }
+      if (e.code == 'UNAUTHORIZED') {
+        await AuthService.instance.signOut();
+      }
+      rethrow;
     }
   }
 
   Future<void> reply(
     String messageId,
     String text,
-    String replyToText, {
-    bool anonymous = false,
-  }) async {
-    final (uid, name) = await _author();
-    final flagged = Moderation.isFlagged(text);
-    final storedText = flagged ? 'Removed by moderation' : text;
-    if (!SupabaseInit.isOnlineMode) {
-      final op = <String, dynamic>{
-        'type': 'message',
-        'messageType': 'text',
-        'text': storedText,
-        'authorId': uid,
-        'authorName': name,
-        'isAnonymous': anonymous,
-        'replyToId': messageId,
-        'replyToText': replyToText,
-        'flagged': flagged,
-        'flagReason': flagged ? Moderation.flagReason(text) : null,
-      };
-      if (flagged) op['flaggedOriginal'] = text;
-      await _enqueue(op);
-      return;
-    }
-    await _db.from('messages').insert({
-      'author_id': uid,
-      'author_name': name,
-      'is_anonymous': anonymous,
-      'body': storedText,
-      'type': 'text',
-      'reply_to': messageId,
-      'reply_to_text': replyToText,
-      'pinned': false,
-      'reactions': <String, int>{},
-      'flagged': flagged,
-      'flag_reason': flagged ? Moderation.flagReason(text) : null,
-    });
+    String replyToText,
+  ) async {
+    await _postText(
+      text,
+      replyToId: messageId,
+      replyToText: replyToText,
+    );
   }
 
+  /// Pins/unpins a message. Admin only — the server enforces it and
+  /// answers 403 for everyone else.
   Future<void> togglePin(String messageId, bool pinned) async {
-    if (!SupabaseInit.isOnlineMode) return;
     try {
-      await _db
-          .from('messages')
-          .update({'pinned': pinned})
-          .eq('id', messageId);
-    } catch (_) {
-      // Best effort.
+      await ApiClient.instance.post(
+        '/api/messages/$messageId/pin',
+        auth: true,
+        body: {'pinned': pinned},
+      );
+      _forceFullRefresh();
+      _notifyLocalChange();
+    } on ApiException catch (e) {
+      if (e.code == 'UNAUTHORIZED') {
+        await AuthService.instance.signOut();
+      }
+      rethrow;
     }
   }
 
@@ -595,8 +608,8 @@ class CommunityService {
   /// local-only — see the class doc). The feed stream re-emits so the
   /// screens' bookmark filter updates.
   Future<void> toggleBookmark(String messageId) async {
-    // No uid needed: bookmarks are local-only (per device), so they
-    // work with no login at all.
+    // Bookmarks are local-only (per device); the community tab itself
+    // requires login, so a uid is always present here.
     await _loadBookmarks();
     if (_bookmarkedIds.contains(messageId)) {
       _bookmarkedIds.remove(messageId);
@@ -608,54 +621,36 @@ class CommunityService {
   }
 
   Future<void> report(String messageId, String reason) async {
-    final uid = AuthService.instance.effectiveUid;
-    if (!SupabaseInit.isOnlineMode) {
-      await _enqueue({
-        'type': 'report',
-        'messageId': messageId,
-        'reason': reason,
-        'reporterUid': uid,
-      });
-      return;
+    try {
+      await ApiClient.instance.post(
+        '/api/messages/$messageId/report',
+        auth: true,
+        body: {'reason': reason},
+      );
+      _forceFullRefresh();
+      _notifyLocalChange();
+    } on ApiException catch (e) {
+      if (e.code == 'NETWORK') {
+        await enqueueOp({
+          'type': 'report',
+          'messageId': messageId,
+          'reason': reason,
+        });
+        return;
+      }
+      if (e.code == 'UNAUTHORIZED') {
+        await AuthService.instance.signOut();
+      }
+      rethrow;
     }
-    await _db.from('reports').insert({
-      'message_id': messageId,
-      'reporter_id': uid,
-      'reason': reason,
-    });
-    await _db.from('messages').update({
-      'flagged': true,
-      'flag_reason': reason,
-    }).eq('id', messageId);
-    _notifyLocalChange();
   }
 
+  /// Blocks a user LOCALLY (no backend endpoint): their messages stop
+  /// showing in the feed on this device. The feed re-emits at once.
   Future<void> blockUser(String uid) async {
-    final myUid = AuthService.instance.effectiveUid;
-    if (myUid == null) return;
-    if (!SupabaseInit.isOnlineMode) {
-      await _enqueue({
-        'type': 'block',
-        'uid': myUid,
-        'targetUid': uid,
-      });
-      return;
-    }
-    try {
-      final row = await _db
-          .from('users')
-          .select('blocked_ids')
-          .eq('id', myUid)
-          .maybeSingle();
-      final blocked =
-          (row?['blocked_ids'] as List?)?.map((e) => e.toString()).toList() ??
-              [];
-      if (!blocked.contains(uid)) blocked.add(uid);
-      await _db.from('users').update({
-        'blocked_ids': blocked,
-      }).eq('id', myUid);
-    } catch (_) {
-      // Best effort.
-    }
+    await _loadBlocked();
+    _blockedIds.add(uid);
+    await _persistBlocked();
+    _notifyLocalChange();
   }
 }

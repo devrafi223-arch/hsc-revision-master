@@ -348,30 +348,26 @@ void main() {
   });
 
   // ------------------------------------------------------------------
-  // 8. Anonymous messages
+  // 8. Community messages always show their author + photo encoding
   // ------------------------------------------------------------------
-  group('CommunityMessage anonymity', () {
-    CommunityMessage buildMessage({bool isAnonymous = false}) =>
-        CommunityMessage(
+  group('CommunityMessage identity', () {
+    CommunityMessage buildMessage() => CommunityMessage(
           id: 'msg-1',
           authorId: 'user-42',
           authorName: 'Rafi',
           text: 'Physics chapter 1 done',
           type: MessageType.text,
           timestamp: DateTime.utc(2026, 11, 23, 12, 0),
-          isAnonymous: isAnonymous,
         );
 
-    test('anonymous round-trip preserves isAnonymous=true and authorId',
-        () {
-      final original = buildMessage(isAnonymous: true);
+    test('round-trip preserves authorId, authorName and text', () {
+      final original = buildMessage();
       // fromMap takes the doc id as a separate argument (it is not in
       // the map); the id is the message id.
       final restored = CommunityMessage.fromMap(
         original.id,
         original.toMap(),
       );
-      expect(restored.isAnonymous, isTrue);
       expect(restored.authorId, 'user-42');
       expect(restored.authorName, 'Rafi');
       expect(restored.text, 'Physics chapter 1 done');
@@ -381,13 +377,52 @@ void main() {
       );
     });
 
-    test('non-anonymous message defaults isAnonymous=false when the key '
-        'is absent from the map', () {
-      final map = buildMessage().toMap()..remove('isAnonymous');
-      expect(map.containsKey('isAnonymous'), isFalse);
-      final restored = CommunityMessage.fromMap('msg-1', map);
-      expect(restored.isAnonymous, isFalse);
-      expect(restored.authorId, 'user-42');
+    test('a lone image URL as text becomes a photo message', () {
+      const url = 'https://example.blob.core.windows.net/notes/photo.jpg';
+      final message = CommunityMessage.fromMap('msg-2', {
+        'author_id': 'user-42',
+        'author_name': 'Rafi',
+        'text': url,
+        'created_at': '2026-11-24T07:00:00.000Z',
+      });
+      expect(message.type, MessageType.photo);
+      expect(message.photoUrl, url);
+      expect(message.text, isNull);
+    });
+
+    test('isImageUrl rejects text with spaces and non-image URLs', () {
+      expect(
+        CommunityMessage.isImageUrl('https://example.com/a.jpg'),
+        isTrue,
+      );
+      expect(
+        CommunityMessage.isImageUrl('https://example.com/a.jpg?x=1'),
+        isTrue,
+      );
+      expect(
+        CommunityMessage.isImageUrl('look at https://example.com/a.jpg'),
+        isFalse,
+      );
+      expect(
+        CommunityMessage.isImageUrl('https://example.com/page'),
+        isFalse,
+      );
+      expect(CommunityMessage.isImageUrl('hello'), isFalse);
+    });
+
+    test('backend poll votes {optionIndex: [uids]} invert to {uid: index}',
+        () {
+      final poll = PollData.fromMap({
+        'id': 'poll-1',
+        'question': 'Which subject first?',
+        'options': ['Physics', 'Chemistry'],
+        'votes': {
+          '0': ['u1', 'u2'],
+          '1': ['u3'],
+        },
+      });
+      expect(poll.votes, {'u1': 0, 'u2': 0, 'u3': 1});
+      expect(poll.counts, [2, 1]);
     });
   });
 

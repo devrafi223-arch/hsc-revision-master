@@ -1,64 +1,84 @@
-import 'dart:async';
+import '../models/app_user.dart';
+import 'api_client.dart';
+import 'auth_service.dart';
 
-import 'package:supabase_flutter/supabase_flutter.dart';
-
-import 'supabase_init.dart';
-
-/// Admin panel backend. Supabase tables: `users`, `messages`, `reports`.
+/// Admin panel backend (web `/admin` route only — there is no admin
+/// entry in the app UI).
 ///
-/// Who is an admin? ONLY a Supabase `users` row with `is_admin == true`,
-/// checked against the signed-in Auth uid. There is deliberately NO
-/// local/device fallback: the old "first launch on a device becomes
-/// the admin" fallback is removed (Rafi, 2026-11-24) — the panel is
-/// securely locked and lives only at the web `/admin` route, behind an
-/// email + password sign-in. Rafi creates the admin Auth user in the
-/// Supabase dashboard and sets `is_admin: true` on its `users` row.
+/// Who is an admin? ONLY a user whose `/api/auth/me` row has
+/// `is_admin == true`. There is deliberately NO local/device
+/// fallback: the admin signs in with email + 6-digit code, the JWT
+/// carries the flag, and the server re-checks it on every admin call.
 ///
-/// Honest limit: the tables' RLS is still test-only allow-all, so this
-/// lock secures the panel UI, not the raw data — proper RLS is still
-/// owed before public launch.
+/// What the backend offers (see backend/README.md):
+/// - GET /api/admin/users (paginated, newest first)
+/// - DELETE /api/admin/users?id= (never self)
 ///
-/// All counts are best effort; everything returns 0 / empty in local mode
-/// and never throws.
+/// What does NOT exist (no endpoints): message/report counts, a
+/// reports stream, mute, ban, delete-message. [stats] therefore
+/// reports only what the users list can prove: Total users (from the
+/// paginated `total`) and Active today (users whose `last_seen_at`
+/// is within the last 24 h). totalMessages / totalReports stay 0.
 class AdminService {
   AdminService._();
 
   static final AdminService instance = AdminService._();
 
-  SupabaseClient get _db => SupabaseInit.client;
+  /// Strict admin check: the signed-in user's row must have
+  /// `is_admin == true` (from GET /api/auth/me). No local fallback.
+  bool isAdmin() => AuthService.instance.currentUser?.isAdmin == true;
 
-  /// Strict admin check: the `users` row for [uid] must have
-  /// `is_admin == true`. No local fallback, ever.
-  Future<bool> isAdmin(String uid) async {
-    if (!SupabaseInit.isOnlineMode) return false;
-    try {
-      final row = await _db
-          .from('users')
-          .select('is_admin')
-          .eq('id', uid)
-          .maybeSingle();
-      return row?['is_admin'] == true;
-    } catch (_) {
-      return false;
-    }
+  /// One page of users, newest first. Returns
+  /// `{'total': int, 'users': [AppUser, ...]}`. Throws [ApiException]
+  /// (FORBIDDEN when the caller is not an admin, NETWORK when
+  /// offline).
+  Future<Map<String, dynamic>> listUsers({
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final res = await ApiClient.instance.get(
+      '/api/admin/users',
+      auth: true,
+      query: {
+        'limit': '$limit',
+        'offset': '$offset',
+      },
+    );
+    final rows = (res['users'] as List?) ?? [];
+    final users = rows
+        .whereType<Map>()
+        .map((row) {
+          final map = row.cast<String, dynamic>();
+          return AppUser.fromMap((map['id'] as String?) ?? '', map);
+        })
+        .where((u) => u.id.isNotEmpty)
+        .toList();
+    return {
+      'total': (res['total'] as num?)?.toInt() ?? users.length,
+      'users': users,
+    };
   }
 
-  /// Counts one table exactly (best effort, 0 on any error).
-  Future<int> _count(String table) async {
-    try {
-      final response =
-          await _db.from(table).select().count(CountOption.exact);
-      return response.count;
-    } catch (_) {
-      return 0;
-    }
-  }
-
-  /// Keys: totalUsers, totalMessages, totalReports, activeToday.
-  /// activeToday is best effort (users whose row has a `last_seen_at`
-  /// timestamp within the last 24h; 0 when that field is absent).
+  /// Keys: totalUsers, activeToday, totalMessages (0), totalReports
+  /// (0 — see the class doc). Computed from the users list fetch.
   Future<Map<String, int>> stats() async {
-    if (!SupabaseInit.isOnlineMode) {
+    try {
+      final page = await listUsers(limit: 100);
+      final users = page['users'] as List<AppUser>;
+      final since = DateTime.now().subtract(const Duration(hours: 24));
+      var activeToday = 0;
+      for (final u in users) {
+        if (u.lastSeenAt != null && u.lastSeenAt!.isAfter(since)) {
+          activeToday++;
+        }
+      }
+      return {
+        'totalUsers': (page['total'] as int?) ?? users.length,
+        'totalMessages': 0,
+        'totalReports': 0,
+        'activeToday': activeToday,
+      };
+    } catch (_) {
       return {
         'totalUsers': 0,
         'totalMessages': 0,
@@ -66,107 +86,12 @@ class AdminService {
         'activeToday': 0,
       };
     }
-    final totalUsers = await _count('users');
-    final totalMessages = await _count('messages');
-    final totalReports = await _count('reports');
-    var activeToday = 0;
-    try {
-      final since =
-          DateTime.now().subtract(const Duration(hours: 24)).toIso8601String();
-      final response = await _db
-          .from('users')
-          .select()
-          .gte('last_seen_at', since)
-          .count(CountOption.exact);
-      activeToday = response.count;
-    } catch (_) {
-      // Best effort.
-    }
-    return {
-      'totalUsers': totalUsers,
-      'totalMessages': totalMessages,
-      'totalReports': totalReports,
-      'activeToday': activeToday,
-    };
   }
 
-  /// Newest reports first. Offline → an empty list.
-  Stream<List<Map<String, dynamic>>> reportsStream() {
-    if (!SupabaseInit.isOnlineMode) return Stream.value([]);
-    final controller = StreamController<List<Map<String, dynamic>>>();
-    var closed = false;
-    Future<void> emit() async {
-      try {
-        final rows = await _db
-            .from('reports')
-            .select()
-            .order('created_at', ascending: false)
-            .limit(100);
-        if (closed) return;
-        controller.add(
-          (rows as List).whereType<Map>().map((row) {
-            final map = row.cast<String, dynamic>();
-            return {...map, 'id': (map['id'] as Object?)?.toString()};
-          }).toList(),
-        );
-      } catch (_) {
-        // Keep the stream alive; the next Realtime event retries.
-      }
-    }
-
-    unawaited(emit());
-    final channel = _db
-        .channel('public:reports')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'reports',
-          callback: (_) => unawaited(emit()),
-        )
-        .subscribe();
-    controller.onCancel = () async {
-      closed = true;
-      await channel.unsubscribe();
-      await controller.close();
-    };
-    return controller.stream;
-  }
-
-  /// Prevents the user from posting (the app checks `is_muted == true`).
-  /// Offline → no-op (admin actions need Supabase).
-  Future<void> muteUser(String uid) async {
-    if (!SupabaseInit.isOnlineMode) return;
-    try {
-      await _db.from('users').update({'is_muted': true}).eq('id', uid);
-    } catch (_) {
-      // Best effort.
-    }
-  }
-
-  /// Blocks the user from the app entirely (`is_banned == true`).
-  /// Offline → no-op (admin actions need Supabase).
-  Future<void> banUser(String uid) async {
-    if (!SupabaseInit.isOnlineMode) return;
-    try {
-      await _db.from('users').update({'is_banned': true}).eq('id', uid);
-    } catch (_) {
-      // Best effort.
-    }
-  }
-
-  /// Deletes a community message (and its poll row, if any).
-  /// Offline → no-op (admin actions need Supabase).
-  Future<void> deleteMessage(String messageId) async {
-    if (!SupabaseInit.isOnlineMode) return;
-    try {
-      await _db.from('polls').delete().eq('message_id', messageId);
-    } catch (_) {
-      // Best effort; the message delete below is the important part.
-    }
-    try {
-      await _db.from('messages').delete().eq('id', messageId);
-    } catch (_) {
-      // Best effort.
-    }
+  /// Deletes a user (their messages and milestones are deleted with
+  /// them server-side). Never self — the server enforces it and
+  /// answers 400. Throws [ApiException] on failure.
+  Future<void> deleteUser(String id) async {
+    await ApiClient.instance.delete('/api/admin/users', query: {'id': id});
   }
 }

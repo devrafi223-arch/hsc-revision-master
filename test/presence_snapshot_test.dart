@@ -1,61 +1,49 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hsc_revision_master/services/presence_service.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-
-SinglePresenceState state(String key, List<Map<String, dynamic>> payloads) {
-  return SinglePresenceState(
-    key: key,
-    presences: [
-      for (final p in payloads)
-        Presence(presenceRef: '$key-ref', payload: p),
-    ],
-  );
-}
 
 void main() {
-  group('PresenceSnapshot.fromStates', () {
-    test('collects online uids and other users who are typing', () {
-      final snap = PresenceSnapshot.fromStates([
-        state('k1', [
-          {'uid': 'me', 'name': 'Rafi', 'typing': false},
-        ]),
-        state('k2', [
-          {'uid': 'u2', 'name': 'Ani', 'typing': true},
-        ]),
-        state('k3', [
-          {'uid': 'u3', 'name': 'Bristi', 'typing': false},
-        ]),
-      ], 'me');
+  group('PresenceSnapshot.fromApi', () {
+    test('collects online uids from GET /api/presence rows', () {
+      final snap = PresenceSnapshot.fromApi([
+        {
+          'id': 'me',
+          'display_name': 'Rafi',
+          'last_seen_at': '2026-11-24T07:00:00.000Z',
+        },
+        {
+          'id': 'u2',
+          'display_name': 'Ani',
+          'last_seen_at': '2026-11-24T07:00:30.000Z',
+        },
+        {
+          'id': 'u3',
+          'display_name': 'Bristi',
+          'last_seen_at': '2026-11-24T07:01:00.000Z',
+        },
+      ]);
       expect(snap.onlineUids, {'me', 'u2', 'u3'});
-      expect(snap.typingNames, ['Ani']);
     });
 
-    test('self typing is not reported', () {
-      final snap = PresenceSnapshot.fromStates([
-        state('k1', [
-          {'uid': 'me', 'name': 'Rafi', 'typing': true},
-        ]),
-      ], 'me');
-      expect(snap.typingNames, isEmpty);
-    });
-
-    test('entries without a uid are skipped', () {
-      final snap = PresenceSnapshot.fromStates([
-        state('k1', [
-          {'name': 'Ghost', 'typing': true},
-        ]),
-        state('k2', [
-          {'uid': 'u2', 'name': 'Ani', 'typing': true},
-        ]),
-      ], 'me');
+    test('rows without an id are skipped', () {
+      final snap = PresenceSnapshot.fromApi([
+        {'display_name': 'Ghost'},
+        {'id': 'u2', 'display_name': 'Ani'},
+        {'id': ''},
+      ]);
       expect(snap.onlineUids, {'u2'});
-      expect(snap.typingNames, ['Ani']);
     });
 
-    test('empty state gives an empty snapshot', () {
-      final snap = PresenceSnapshot.fromStates([], 'me');
+    test('duplicate ids collapse to one entry', () {
+      final snap = PresenceSnapshot.fromApi([
+        {'id': 'u2'},
+        {'id': 'u2'},
+      ]);
+      expect(snap.onlineUids, {'u2'});
+    });
+
+    test('empty rows give an empty snapshot', () {
+      final snap = PresenceSnapshot.fromApi([]);
       expect(snap.onlineUids, isEmpty);
-      expect(snap.typingNames, isEmpty);
     });
   });
 }

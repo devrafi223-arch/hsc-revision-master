@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../main.dart';
+import '../services/auth_service.dart';
 import 'log_screen.dart';
 
 /// Notification settings, font size, language and theme.
@@ -354,6 +355,53 @@ class _SettingsBodyState extends State<_SettingsBody> {
               style: base.copyWith(fontSize: 14, color: muted, height: 1.45),
             ),
           ),
+        _sectionTitle(context, 'Account'),
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 24),
+          decoration: BoxDecoration(
+            color: isDark ? JimColors.darkSurface : JimColors.card,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: isDark ? JimColors.darkLine : JimColors.line,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Signed in as',
+                        style: base.copyWith(
+                          fontSize: 13,
+                          color: muted,
+                          height: 1.45,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        AuthService.instance.currentUser?.email ?? '',
+                        style: base.copyWith(fontSize: 15, height: 1.45),
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    await AuthService.instance.signOut();
+                    // The app root listens to AuthService.signedIn and
+                    // shows the login screen again.
+                  },
+                  style: TextButton.styleFrom(foregroundColor: Colors.red),
+                  child: const Text('Sign out'),
+                ),
+              ],
+            ),
+          ),
+        ),
         _sectionTitle(context, 'Diagnostics'),
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 24),

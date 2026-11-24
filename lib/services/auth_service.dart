@@ -1,291 +1,168 @@
-import 'dart:math';
-
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/app_user.dart';
-import 'supabase_init.dart';
-import 'user_repository.dart';
+import '../security/secure_local_storage.dart';
+import 'api_client.dart';
 
-/// Email + password + Google sign-in, backed by Supabase Auth.
+/// Email + 6-digit code login against the custom backend. No passwords,
+/// no Google sign-in, no Supabase.
 ///
-/// Every method throws while [SupabaseInit.isOnlineMode] is false.
-/// The message names the REAL init failure (SupabaseInit.lastError),
-/// not the config placeholder — the old static text blamed
-/// supabase_config.dart even when the config was fine and the init
-/// itself had crashed (e.g. the StackOverflowError, 2026-11-23).
-/// There is no OTP system: registration is email + password only
-/// (plus Google Sign-In via Supabase Auth's built-in OAuth — no
-/// google_sign_in package).
+/// Flow: [sendLoginCode] (email) → the user types the code from the
+/// mail → [verifyLoginCode] stores the 7-day JWT (Rafi's session rule)
+/// and the user profile.
+///
+/// [restoreSession] reads a stored JWT at startup and validates it
+/// with GET /api/auth/me. Best effort: with no network the stored
+/// token is trusted and the app opens (the tracker is local-first);
+/// a 401 clears the token and forces login.
+///
+/// There is NO anonymous / guest mode (Rafi, 2026-11-24): without a
+/// valid JWT the app shows the login screen. Community authorship
+/// always comes from the JWT user — never a local "Student" string —
+/// and every backend feature requires the JWT.
 class AuthService {
   AuthService._();
 
   static final AuthService instance = AuthService._();
 
-  /// True while a password-recovery session is awaiting a new
-  /// password. Set by the passwordRecovery auth event (mail-link
-  /// flow) and by [verifyRecoveryCode] (code flow); cleared when the
-  /// new password is saved or the reset screen is dismissed. The app
-  /// root shows the reset screen while this is true.
-  static final ValueNotifier<bool> recoveryPending =
-      ValueNotifier<bool>(false);
+  AppUser? _currentUser;
 
-  /// The real reason online is unavailable: the init failure when
-  /// there is one, otherwise the missing-config hint.
-  static String get _onlineError {
-    final cause = SupabaseInit.lastError;
-    if (cause != null && cause.isNotEmpty) {
-      return 'Online features unavailable: $cause';
-    }
-    return 'Online features need Supabase setup — replace '
-        'lib/supabase_config.dart with your real project values.';
-  }
+  /// The signed-in user, or null when logged out.
+  AppUser? get currentUser => _currentUser;
 
-  SupabaseClient get _auth => SupabaseInit.client;
+  /// The signed-in uid, or null when logged out.
+  String? get currentUid => _currentUser?.id;
 
-  /// Where Supabase sends the browser after email confirm / Google
-  /// sign-in on mobile: a deep link back into the app (supabase_flutter
-  /// picks the session up via app_links). Without this, Supabase uses the
-  /// project's Site URL — the default is http://localhost:3000, which
-  /// refuses to connect on a real phone (seen 2026-11-23: the confirm link
-  /// landed on a dead localhost page). The same URL must be listed in the
-  /// Supabase dashboard: Auth -> URL Configuration -> Site URL and
-  /// Redirect URLs. Web passes null (the web app uses its own URL).
-  static const String _authRedirect = 'com.rafi.hscrevise://login-callback';
+  /// True while a JWT user is signed in. The app root listens to this
+  /// to swap between the login screen and the tracker.
+  final ValueNotifier<bool> signedIn = ValueNotifier<bool>(false);
 
-  /// Emits the signed-in uid, or null when signed out. In local-only mode
-  /// emits a single null (there is no account without Supabase).
-  Stream<String?> get authStateChanges {
-    if (!SupabaseInit.isOnlineMode) return Stream<String?>.value(null);
-    return _auth.auth.onAuthStateChange.map(
-      (data) => data.session?.user.id,
+  bool get isSignedIn => signedIn.value;
+
+  /// Sends the 6-digit login code to [email]. Throws [ApiException]
+  /// (e.g. EMAIL_DOMAIN_NOT_ALLOWED, TOO_SOON, EMAIL_NOT_CONFIGURED)
+  /// on failure.
+  Future<void> sendLoginCode({required String email}) async {
+    await ApiClient.instance.post(
+      '/api/auth/send-code',
+      body: {'email': email.trim()},
     );
   }
 
-  String? get currentUid => SupabaseInit.isOnlineMode
-      ? _auth.auth.currentUser?.id
-      : null;
-
-  bool get signedIn => currentUid != null;
-
-  /// No-login identity (Rafi, 2026-11-23: the login screen is removed).
-  /// The app still needs a stable per-device id for community posts,
-  /// votes, notes and groups — a UUID generated once and kept in
-  /// SharedPreferences. A signed-in account always wins over it.
-  static const _localUidKey = 'local-anon-uid-v1';
-  String? _localUid;
-  String? get localUid => _localUid;
-
-  /// The id features use when nobody is signed in.
-  String? get effectiveUid => currentUid ?? _localUid;
-
-  /// Loads (or first creates) the local anonymous id. Call once at
-  /// startup; never throws.
-  Future<void> ensureLocalUid() async {
-    if (_localUid != null) return;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      var uid = prefs.getString(_localUidKey);
-      if (uid == null || uid.isEmpty) {
-        uid = _newUuidV4();
-        await prefs.setString(_localUidKey, uid);
-      }
-      _localUid = uid;
-    } catch (_) {
-      // Identity is best effort; the app works without it (features
-      // that need an id simply stay off).
-      _localUid ??= _newUuidV4();
-    }
-  }
-
-  static String _newUuidV4() {
-    final r = Random.secure();
-    final bytes = List<int>.generate(16, (_) => r.nextInt(256));
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    final h = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return '${h.substring(0, 8)}-${h.substring(8, 12)}-'
-        '${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
-  }
-
-  /// Emits true when a password-recovery link was opened: Supabase
-  /// emits [AuthChangeEvent.passwordRecovery] and the app must show
-  /// the "set a new password" screen instead of the tracker.
-  /// Emits a single false while offline.
-  Stream<bool> get passwordRecoveryChanges {
-    if (!SupabaseInit.isOnlineMode) return Stream<bool>.value(false);
-    return _auth.auth.onAuthStateChange.map(
-      (data) => data.event == AuthChangeEvent.passwordRecovery,
-    );
-  }
-
-  /// False while Supabase is not configured (local-only mode).
-  bool get isAvailable => SupabaseInit.isOnlineMode;
-
-  void _requireOnline() {
-    if (!SupabaseInit.isOnlineMode) throw Exception(_onlineError);
-  }
-
-  Future<void> registerWithEmail({
+  /// Verifies the 6-digit code, stores the JWT + profile, and flips
+  /// [signedIn]. Returns the signed-in user. Throws [ApiException]
+  /// (CODE_INVALID, CODE_EXPIRED, CODE_LOCKED, BANNED) on failure.
+  Future<AppUser> verifyLoginCode({
     required String email,
-    required String password,
-    required String name,
+    required String code,
   }) async {
-    _requireOnline();
-    final response = await _auth.auth.signUp(
-      email: email,
-      password: password,
-      emailRedirectTo: kIsWeb ? null : _authRedirect,
-      data: {'display_name': name},
+    final res = await ApiClient.instance.post(
+      '/api/auth/verify-code',
+      body: {'email': email.trim(), 'code': code.trim()},
     );
-    final user = response.user;
-    if (user == null) throw Exception('Registration failed: no user.');
-    // Best effort: create the profile row so the community can show it.
-    try {
-      await UserRepository.instance.saveUser(
-        AppUser(id: user.id, name: name, email: email),
+    final token = res['token'] as String?;
+    final userMap = res['user'] as Map?;
+    if (token == null || token.isEmpty || userMap == null) {
+      throw ApiException(
+        'SERVER_ERROR',
+        'Log-in failed — the server did not return a session. Try again.',
       );
-    } catch (_) {
-      // Profile row failure must not fail registration itself.
     }
+    await SecureLocalStorage.writeToken(token);
+    await SecureLocalStorage.clearLegacySession();
+    _currentUser = AppUser.fromMap(
+      (userMap['id'] as String?) ?? '',
+      userMap.cast<String, dynamic>(),
+    );
+    signedIn.value = true;
+    return _currentUser!;
   }
 
-  Future<void> loginWithEmail({
-    required String email,
-    required String password,
-  }) async {
-    _requireOnline();
-    await _auth.auth.signInWithPassword(
-      email: email,
-      password: password,
-    );
-  }
-
-  Future<void> signInWithGoogle() async {
-    _requireOnline();
-    // Supabase Auth's built-in OAuth (no google_sign_in package): opens
-    // the browser for Google sign-in and returns to the app via deep link.
-    // Returns false when the flow is cancelled / cannot start.
-    final launched = await _auth.auth.signInWithOAuth(
-      OAuthProvider.google,
-      redirectTo: kIsWeb ? null : _authRedirect,
-    );
-    if (!launched) {
-      throw Exception('Google sign-in cancelled.');
-    }
-    // The session arrives via onAuthStateChange after the redirect; if
-    // the user object is already present (e.g. web), create the profile
-    // row now. Otherwise the row is created on first profile load.
-    final user = _auth.auth.currentUser;
-    if (user != null) {
-      try {
-        final existing =
-            await UserRepository.instance.getUser(user.id);
-        if (existing == null) {
-          final meta = user.userMetadata ?? {};
-          await UserRepository.instance.saveUser(
-            AppUser(
-              id: user.id,
-              name: (meta['display_name'] as String?) ??
-                  (meta['full_name'] as String?) ??
-                  (meta['name'] as String?) ??
-                  'Student',
-              email: user.email ?? '',
-              photoUrl: meta['avatar_url'] as String?,
-            ),
-          );
-        }
-      } catch (_) {
-        // Profile row failure must not fail sign-in itself.
+  /// Startup restore: a stored JWT opens the app (optimistic — the
+  /// tracker works offline). The token is validated with
+  /// GET /api/auth/me in the background: a 401 clears it and flips
+  /// [signedIn] to false; any other failure (offline, server down)
+  /// keeps the stored token and lets the app open.
+  Future<bool> restoreSession() async {
+    final token = await SecureLocalStorage.readToken();
+    if (token == null || token.isEmpty) return false;
+    signedIn.value = true;
+    try {
+      final res = await ApiClient.instance.get('/api/auth/me', auth: true);
+      final userMap = res['user'] as Map?;
+      if (userMap != null) {
+        _currentUser = AppUser.fromMap(
+          (userMap['id'] as String?) ?? '',
+          userMap.cast<String, dynamic>(),
+        );
       }
+    } on ApiException catch (e) {
+      if (e.code == 'UNAUTHORIZED') {
+        await signOut();
+        return false;
+      }
+      // Offline / server down: keep the token, open the app.
+    } catch (_) {
+      // Same: the tracker is local-first, the session re-validates
+      // on the next online call.
     }
+    return signedIn.value;
   }
 
+  /// Refreshes the cached profile from GET /api/auth/me. Returns the
+  /// cached user when the call fails; null when not signed in.
+  /// A 401 signs out (the session is dead) and rethrows.
+  Future<AppUser?> refreshMe() async {
+    if (!isSignedIn) return null;
+    final res = await ApiClient.instance.get('/api/auth/me', auth: true);
+    final userMap = res['user'] as Map?;
+    if (userMap == null) return _currentUser;
+    _currentUser = AppUser.fromMap(
+      (userMap['id'] as String?) ?? '',
+      userMap.cast<String, dynamic>(),
+    );
+    return _currentUser;
+  }
+
+  /// Signs out: clears the JWT + cached user and flips [signedIn].
+  /// The app root shows the login screen again.
   Future<void> signOut() async {
-    if (!SupabaseInit.isOnlineMode) return;
-    await _auth.auth.signOut();
+    await SecureLocalStorage.clearToken();
+    _currentUser = null;
+    signedIn.value = false;
   }
 
-  Future<void> sendEmailVerification() async {
-    _requireOnline();
-    final user = _auth.auth.currentUser;
-    if (user == null) throw Exception('No user is signed in.');
-    final email = user.email;
-    if (email == null) throw Exception('No email on this account.');
-    // Re-sends the Supabase signup confirmation email.
-    await _auth.auth.resend(type: OtpType.signup, email: email);
-  }
-
-  /// Sends the password-reset email. The mail carries a 6-digit code
-  /// (the dashboard template must include `{{ .Token }}`) AND the
-  /// link as a fallback: on a phone the link opens the app and emits
-  /// [AuthChangeEvent.passwordRecovery]; the code path verifies with
-  /// [verifyRecoveryCode] instead. The deep link must be listed in
-  /// the Supabase dashboard (Auth -> URL Configuration -> Redirect
-  /// URLs).
-  Future<void> sendPasswordResetEmail({required String email}) async {
-    _requireOnline();
-    await _auth.auth.resetPasswordForEmail(
-      email,
-      redirectTo: kIsWeb ? null : _authRedirect,
-    );
-  }
-
-  /// Verifies the 6-digit signup code from the confirmation mail
-  /// (the dashboard template must include `{{ .Token }}`). On success
-  /// the session is set and the user is signed in.
-  Future<void> verifySignupCode({
-    required String email,
-    required String code,
-  }) async {
-    _requireOnline();
-    await _auth.auth.verifyOTP(
-      email: email,
-      token: code,
-      type: OtpType.signup,
-    );
-  }
-
-  /// Re-sends the signup confirmation mail (new code).
-  Future<void> resendSignupCode({required String email}) async {
-    _requireOnline();
-    await _auth.auth.resend(type: OtpType.signup, email: email);
-  }
-
-  /// Verifies the 6-digit recovery code from the reset mail and opens
-  /// the set-new-password screen (via [recoveryPending]).
-  Future<void> verifyRecoveryCode({
-    required String email,
-    required String code,
-  }) async {
-    _requireOnline();
-    await _auth.auth.verifyOTP(
-      email: email,
-      token: code,
-      type: OtpType.recovery,
-    );
-    recoveryPending.value = true;
-  }
-
-  /// Sets the new password for the recovery session (after the user
-  /// opened the reset link). The session stays valid afterwards, so
-  /// the user lands signed in.
-  Future<void> updatePassword({required String newPassword}) async {
-    _requireOnline();
-    await _auth.auth.updateUser(
-      UserAttributes(password: newPassword),
-    );
-  }
-
-  /// Human-readable auth error: network/DNS failures become a plain
-  /// "check your internet" message instead of the raw exception dump
-  /// (which users cannot act on — e.g. the phone failing to resolve
-  /// the Supabase host showed a full AuthRetryableFetchException /
-  /// SocketException wall of text). Other known failures get a plain
-  /// sentence too; anything else keeps its message minus the
-  /// "Exception: " prefix.
+  /// Human-readable auth error. [ApiException] codes map first (the
+  /// custom backend's own codes); anything else falls through to the
+  /// legacy substring rules (kept for the unit tests and for raw
+  /// transport errors). Network/DNS failures become a plain "check
+  /// your internet" message instead of the raw exception dump.
   static String friendlyError(Object e) {
+    if (e is ApiException) {
+      switch (e.code) {
+        case 'CODE_INVALID':
+          return 'Wrong code. Try again.';
+        case 'CODE_EXPIRED':
+          return 'The code has expired — tap Resend for a new one.';
+        case 'CODE_LOCKED':
+          return 'Too many wrong tries. Ask for a new code.';
+        case 'TOO_SOON':
+          return 'Wait a minute before asking for a new code.';
+        case 'EMAIL_DOMAIN_NOT_ALLOWED':
+          return 'Only Gmail, Hotmail, Outlook, and Yahoo emails are allowed.';
+        case 'EMAIL_NOT_CONFIGURED':
+          return 'Email sending is not set up on the server yet — ask the admin to set it.';
+        case 'BANNED':
+          return 'This account is banned.';
+        case 'UNAUTHORIZED':
+          return 'Please log in to continue.';
+        case 'FORBIDDEN':
+          return 'You are not allowed to do that.';
+        case 'NOT_FOUND':
+          return 'That was not found. Try again.';
+      }
+      return e.message;
+    }
     final text = e.toString();
     if (text.contains('SocketException') ||
         text.contains('Failed host lookup') ||
@@ -308,7 +185,9 @@ class AuthService {
     if (text.contains('Email not confirmed')) {
       return 'Your email is not confirmed yet — check your inbox for the code.';
     }
-    if (text.contains('otp_expired') || text.contains('Token has expired')) {
+    if (text.contains('otp_expired') ||
+        text.contains('Token has expired') ||
+        text.contains('CODE_EXPIRED')) {
       return 'The code has expired — tap Resend for a new one.';
     }
     if (text.contains('over_email_send_rate_limit') ||

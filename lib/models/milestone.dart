@@ -1,6 +1,7 @@
 /// A milestone earned by finishing a chapter fully. One milestone per
 /// subject + chapter — the display name comes from [Milestones.nameFor].
-/// Stored in the Supabase `milestones` table.
+/// Mirrored to the custom backend's `milestones` table (POST
+/// /api/milestones, one row per user + chapter).
 class Milestone {
   Milestone({
     required this.id,
@@ -25,7 +26,7 @@ class Milestone {
         'earnedAt': earnedAt.millisecondsSinceEpoch,
       };
 
-  /// Accepts both the app map shape ([toMap]) and a raw Supabase row
+  /// Accepts both the app map shape ([toMap]) and a raw backend row
   /// (`unlocked_at` ISO string, `chapter_id` instead of `chapterTitle`).
   factory Milestone.fromMap(String id, Map<String, dynamic> m) {
     final raw = m['unlocked_at'] ?? m['earnedAt'];

@@ -7,10 +7,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'data/syllabus.dart';
 import 'screens/admin_gate_screen.dart';
+import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 import 'services/app_log.dart';
 import 'services/auth_service.dart';
-import 'services/supabase_init.dart';
 import 'services/messaging_service.dart';
 import 'services/sync_service.dart';
 
@@ -145,40 +145,33 @@ Future<void> main() async {
   };
   await AppLog.init();
   AppLog.info('app', 'starting');
-  // Supabase + push setup. Both are fully guarded and never throw: while
-  // lib/supabase_config.dart still holds the placeholder values the app
-  // runs in LOCAL-ONLY mode (see lib/services/supabase_init.dart).
+  // Restore the JWT session (custom backend). Optimistic: a stored
+  // token opens the app even offline (the tracker is local-first);
+  // a 401 from GET /api/auth/me clears it and the login screen
+  // shows. NEVER let the network block the first frame: the restore
+  // is capped at 12 s — on a bad connection the app used to stay a
+  // black window forever (Windows, 2026-11-23).
   try {
-    // NEVER let the network block the first frame: Supabase.initialize()
-    // is awaited before runApp and a stalled TLS/network call has no
-    // timeout of its own — on a bad connection the app used to stay a
-    // black window forever (Windows, 2026-11-23). 12s is plenty on a
-    // normal connection; on timeout the app starts offline and the
-    // "Offline — will sync" pill shows on the Today tab.
-    final online = await SupabaseInit.initialize().timeout(
+    final restored = await AuthService.instance.restoreSession().timeout(
       const Duration(seconds: 12),
       onTimeout: () {
         AppLog.warn(
           'startup',
-          'Supabase init timed out after 12s — continuing offline',
+          'Session restore timed out after 12s — continuing',
         );
-        return false;
+        return AuthService.instance.isSignedIn;
       },
     );
-    AppLog.info('startup', 'Supabase init done: online=$online');
+    AppLog.info('startup', 'session restore done: signedIn=$restored');
   } catch (e) {
-    AppLog.warn('startup', 'Supabase init failed: $e');
+    AppLog.warn('startup', 'Session restore failed: $e');
   }
-  // Local anonymous id for community/notes/groups now that there is no
-  // login screen (Rafi, 2026-11-23). Never throws; the app works
-  // without it.
-  try {
-    await AuthService.instance.ensureLocalUid();
-  } catch (_) {}
-  // NOTE: no device-admin fallback here anymore (Rafi, 2026-11-24):
-  // the admin panel is securely locked at the web /admin route behind
-  // an email + password sign-in and a strict users.is_admin check.
-  // The old recordFirstUser call is deleted with it.
+  // NOTE: no guest mode and no device-admin fallback (Rafi,
+  // 2026-11-24): without a valid JWT the app shows the login screen,
+  // and the admin panel is securely locked at the web /admin route
+  // behind an email + 6-digit code sign-in and a strict
+  // users.is_admin check. The old recordFirstUser call is deleted
+  // with it.
   try {
     await MessagingService.init();
   } catch (_) {
@@ -235,16 +228,22 @@ class _HscRevisionAppState extends State<HscRevisionApp> {
       debugShowCheckedModeBanner: false,
       navigatorKey: AppLog.navigatorKey,
       theme: jimTheme(dark: _dark),
-      // No login screen (Rafi, 2026-11-23): the app opens straight
-      // into the tracker. Online features (community, notes sync,
-      // groups) run under a local anonymous id from
-      // AuthService.ensureLocalUid; the admin panel lives only at
-      // /admin (web), behind an admin sign-in.
+      // Login gate (Rafi, 2026-11-24): no guest mode — without a valid
+      // JWT the app shows the login screen. The signedIn notifier
+      // flips on login / logout / a 401, and the root rebuilds.
+      // The admin panel lives only at /admin (web), behind an admin
+      // sign-in.
       home: isAdminRoute
           ? const AdminGateScreen()
-          : HomeScreen(
-              dark: _dark,
-              onToggleTheme: _toggleTheme,
+          : ValueListenableBuilder<bool>(
+              valueListenable: AuthService.instance.signedIn,
+              builder: (context, signedIn, _) {
+                if (!signedIn) return const AuthScreen();
+                return HomeScreen(
+                  dark: _dark,
+                  onToggleTheme: _toggleTheme,
+                );
+              },
             ),
     );
   }

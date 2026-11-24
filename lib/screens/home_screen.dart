@@ -10,6 +10,7 @@ import '../main.dart';
 import '../milestones.dart';
 import '../models/milestone.dart';
 import '../services/messaging_service.dart';
+import '../services/progress_service.dart';
 import '../services/sync_service.dart';
 import '../tracker_store.dart';
 import '../widgets/calendar_view.dart';
@@ -173,6 +174,16 @@ class _HomeScreenState extends State<HomeScreen> {
         ref.subject.nameEn,
         ref.chapter.title,
         index,
+      );
+      // Mirror the completion to the server (leaderboard +
+      // chapters_done). Best effort, never throws, and it runs even
+      // with alerts off — the early return below is only about the
+      // celebration UI.
+      unawaited(
+        ProgressService.recordChapterDone(
+          chapterId: chapterId,
+          subject: ref.subject.nameEn,
+        ),
       );
       // Milestone alerts can be switched off in Settings.
       final alertsOn = prefs.getBool('notif-milestone') ?? true;

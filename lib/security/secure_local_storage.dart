@@ -2,63 +2,67 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
-/// Persists the Supabase session in the OS credential store (Android
-/// Keystore / iOS Keychain / Windows Credential Vault / macOS Keychain)
-/// instead of plain SharedPreferences, where the default
-/// `SharedPreferencesLocalStorage` keeps the access + refresh tokens in
-/// cleartext XML.
+/// JWT storage for the custom backend (replaces the old Supabase
+/// session store). The token lives in the OS credential store
+/// (Android Keystore / iOS Keychain / Windows Credential Vault),
+/// never in cleartext SharedPreferences.
 ///
 /// Fail-soft by design: every op catches platform errors (e.g. Linux
-/// without libsecret) and degrades to "no persisted session" instead of
-/// crashing auth — the user just signs in again.
+/// without libsecret) and degrades to "no token" instead of crashing —
+/// the user just signs in again.
 ///
-/// On web this still works (flutter_secure_storage falls back to browser
-/// storage there, which is only as safe as localStorage — documented
-/// limit, same as the default).
-class SecureLocalStorage extends LocalStorage {
+/// On web this still works (flutter_secure_storage falls back to
+/// browser storage there, which is only as safe as localStorage —
+/// documented limit, same as the old default).
+class SecureLocalStorage {
   const SecureLocalStorage();
 
   static const _storage = FlutterSecureStorage();
-  static const _key = 'sb-session';
 
-  @override
-  Future<void> initialize() async {}
+  /// Key holding the custom-backend JWT (7-day session).
+  static const _tokenKey = 'hsc-jwt-v1';
 
-  @override
-  Future<bool> hasAccessToken() async {
+  /// Old Supabase session key — only ever deleted, never read for auth.
+  static const _legacySessionKey = 'sb-session';
+
+  static Future<String?> readToken() async {
     try {
-      return await _storage.read(key: _key) != null;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  @override
-  Future<String?> accessToken() async {
-    try {
-      final raw = await _storage.read(key: _key);
-      final clean = storedSessionString(raw);
-      if (raw != null && clean == null) {
-        // A stored value that is not a JSON session is corrupt: drop
-        // it so startup continues logged-out instead of crashing in
-        // GoTrue's session recovery.
-        await _storage.delete(key: _key);
-      }
-      return clean;
+      return await _storage.read(key: _tokenKey);
     } catch (_) {
       return null;
     }
   }
 
-  /// The string supabase_flutter passes to GoTrue.setInitialSession /
-  /// recoverSession must be the WHOLE stored JSON session — those
-  /// methods json-decode it into a Session. Returning only the
-  /// access_token field (a bare `eyJ...` JWT) made startup throw
-  /// FormatException: Unexpected character (at character 1) on every
-  /// launch with a persisted session (Windows crash, 2026-11-23).
-  /// Anything that is not a JSON object is corrupt and yields null.
+  static Future<void> writeToken(String token) async {
+    try {
+      await _storage.write(key: _tokenKey, value: token);
+    } catch (_) {}
+  }
+
+  static Future<void> clearToken() async {
+    try {
+      await _storage.delete(key: _tokenKey);
+    } catch (_) {}
+  }
+
+  /// Drops a stale Supabase session left under the old key, if any.
+  /// The old token is useless against the custom backend, and leaving
+  /// it around would only confuse a future debug session.
+  static Future<void> clearLegacySession() async {
+    try {
+      await _storage.delete(key: _legacySessionKey);
+    } catch (_) {}
+  }
+
+  /// Legacy validator, kept for the unit test: a full JSON session
+  /// passes through unchanged, while a bare JWT, garbage, or a
+  /// non-object JSON value yields null.
+  ///
+  /// (The old Supabase session was a JSON object; returning only the
+  /// access_token field — a bare `eyJ...` JWT — made GoTrue's session
+  /// recovery throw FormatException on every launch with a persisted
+  /// session. Windows crash, 2026-11-23.)
   @visibleForTesting
   static String? storedSessionString(String? raw) {
     if (raw == null) return null;
@@ -71,19 +75,5 @@ class SecureLocalStorage extends LocalStorage {
       return null;
     }
     return raw;
-  }
-
-  @override
-  Future<void> removePersistedSession() async {
-    try {
-      await _storage.delete(key: _key);
-    } catch (_) {}
-  }
-
-  @override
-  Future<void> persistSession(String persistSessionString) async {
-    try {
-      await _storage.write(key: _key, value: persistSessionString);
-    } catch (_) {}
   }
 }

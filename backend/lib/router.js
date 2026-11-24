@@ -32,6 +32,8 @@ const routes = [
   ['GET', ['api', 'admin', 'users'], require('./routes/admin-users')],
   ['DELETE', ['api', 'admin', 'users'], require('./routes/admin-users')],
   ['POST', ['api', 'upload'], require('./routes/upload')],
+  ['GET', ['api', 'presence'], require('./routes/presence')],
+  ['POST', ['api', 'presence'], require('./routes/presence')],
 ];
 
 function match(method, segments) {

@@ -4,6 +4,10 @@ enum MessageType { text, photo, poll, voice }
 /// A poll attached to a community message. One vote per user, enforced by
 /// the [votes] map key: userId -> optionIndex. Re-voting overwrites the
 /// previous vote instead of adding a second one (same as Telegram).
+///
+/// [fromMap] accepts both shapes: the client shape `{uid: optionIndex}`
+/// (what [toMap] writes) and the backend shape `{optionIndex: [uid, ...]}`
+/// (what GET /api/polls returns) — the backend shape is inverted here.
 class PollData {
   PollData({
     required this.id,
@@ -47,7 +51,20 @@ class PollData {
     final votes = <String, int>{};
     if (rawVotes is Map) {
       for (final entry in rawVotes.entries) {
-        votes[entry.key.toString()] = (entry.value as num?)?.toInt() ?? 0;
+        final key = entry.key.toString();
+        final value = entry.value;
+        if (value is List) {
+          // Backend shape: {optionIndex: [uid, ...]} — invert it so
+          // one user still holds exactly one option index.
+          final index = int.tryParse(key) ?? -1;
+          if (index >= 0) {
+            for (final uid in value) {
+              votes[uid.toString()] = index;
+            }
+          }
+        } else {
+          votes[key] = (value as num?)?.toInt() ?? 0;
+        }
       }
     }
     return PollData(
@@ -60,12 +77,16 @@ class PollData {
   }
 }
 
-/// One message in the universal community (or inside a group when
-/// [groupId] is set). Stored in the Supabase `messages` table.
+/// One message in the universal community. Stored in the custom
+/// backend's `messages` table (no group chats: the backend has no
+/// group_id column).
 ///
-/// When [isAnonymous] is true the UI shows "Anonymous" with no name or
-/// photo, but [authorId] is still stored, so moderation, reporting and
-/// blocking still apply.
+/// A photo message is stored as a message whose [text] IS the Blob
+/// image URL — the backend has no photo column, so [fromMap] detects
+/// a lone image URL and exposes it as [photoUrl] with [text] null.
+///
+/// There is no anonymous posting: the backend always records the JWT
+/// user's name, and every message shows its author.
 class CommunityMessage {
   CommunityMessage({
     required this.id,
@@ -87,7 +108,6 @@ class CommunityMessage {
     this.flagged = false,
     this.flagReason,
     this.groupId,
-    this.isAnonymous = false,
   })  : reactions = reactions ?? {},
         reactionUsers = reactionUsers ?? {},
         bookmarkedBy = bookmarkedBy ?? [];
@@ -124,11 +144,6 @@ class CommunityMessage {
   /// null = universal community, otherwise the group id.
   final String? groupId;
 
-  /// When true the UI shows "Anonymous" with no name or photo. The
-  /// [authorId] is still stored, so moderation, reporting and blocking
-  /// still apply.
-  final bool isAnonymous;
-
   Map<String, dynamic> toMap() => {
         'authorId': authorId,
         'authorName': authorName,
@@ -150,14 +165,28 @@ class CommunityMessage {
         'flagged': flagged,
         'flagReason': flagReason,
         'groupId': groupId,
-        'isAnonymous': isAnonymous,
       };
 
   /// Accepts both the app/offline-queue map shape ([toMap]: `text`,
   /// `timestamp` as epoch millis, `type`, camelCase keys) and a raw
-  /// Supabase row (snake_case: `body`, `created_at` ISO string,
-  /// `author_id`, `photo_url`, `reply_to`, ...). When `type` is absent
-  /// (Supabase rows) it is derived from which media/poll field is set.
+  /// backend row (snake_case: `text`, `created_at` ISO string,
+  /// `author_id`, `is_pinned`, `is_flagged`, `poll_id`). When `type`
+  /// is absent (backend rows) it is derived from which media/poll
+  /// field is set — including a lone image URL as `text`, which is
+  /// how photo messages are stored (see the class doc).
+  ///
+  /// True when [text] is a lone image URL (the photo-message encoding).
+  static bool isImageUrl(String text) {
+    final t = text.trim();
+    if (!t.startsWith('http')) return false;
+    if (t.contains(' ')) return false;
+    final path = t.split('?').first.toLowerCase();
+    return path.endsWith('.jpg') ||
+        path.endsWith('.jpeg') ||
+        path.endsWith('.png') ||
+        path.endsWith('.webp');
+  }
+
   factory CommunityMessage.fromMap(String id, Map<String, dynamic> m) {
     final rawTs = m['created_at'] ?? m['timestamp'];
     final DateTime timestamp;
@@ -201,10 +230,14 @@ class CommunityMessage {
         }
       }
     }
+    // Photo-message encoding: the message text IS the Blob image URL.
+    final rawText = (m['body'] as String?) ?? (m['text'] as String?);
+    final textIsPhoto = rawText != null && isImageUrl(rawText);
+    final photoUrl = textIsPhoto
+        ? rawText
+        : (m['photo_url'] as String?) ?? (m['photoUrl'] as String?);
     final hasPoll = m['poll'] is Map || m['poll_id'] != null;
-    final hasPhoto =
-        (m['photo_url'] as String?)?.isNotEmpty == true ||
-            (m['photoUrl'] as String?)?.isNotEmpty == true;
+    final hasPhoto = photoUrl?.isNotEmpty == true;
     final hasVoice =
         (m['voice_url'] as String?)?.isNotEmpty == true ||
             (m['voiceUrl'] as String?)?.isNotEmpty == true;
@@ -223,8 +256,8 @@ class CommunityMessage {
           (m['author_name'] as String?) ?? (m['authorName'] as String?) ?? '',
       authorPhoto:
           (m['author_photo'] as String?) ?? (m['authorPhoto'] as String?),
-      text: (m['body'] as String?) ?? (m['text'] as String?),
-      photoUrl: (m['photo_url'] as String?) ?? (m['photoUrl'] as String?),
+      text: textIsPhoto ? null : rawText,
+      photoUrl: photoUrl,
       voiceUrl: (m['voice_url'] as String?) ?? (m['voiceUrl'] as String?),
       replyToId: (m['reply_to'] as String?) ?? (m['replyToId'] as String?),
       replyToText:
@@ -241,7 +274,7 @@ class CommunityMessage {
                   (m['poll'] as Map).cast<String, dynamic>(),
                 )
               : null,
-      pinned: m['pinned'] == true,
+      pinned: m['pinned'] == true || m['is_pinned'] == true,
       reactions: reactions,
       reactionUsers: reactionUsers,
       bookmarkedBy: (m['bookmarkedBy'] as List?)
@@ -251,12 +284,10 @@ class CommunityMessage {
               ?.map((e) => e.toString())
               .toList() ??
           [],
-      flagged: m['flagged'] == true,
+      flagged: m['flagged'] == true || m['is_flagged'] == true,
       flagReason:
           (m['flag_reason'] as String?) ?? (m['flagReason'] as String?),
       groupId: (m['group_id'] as String?) ?? (m['groupId'] as String?),
-      isAnonymous:
-          (m['is_anonymous'] == true) || (m['isAnonymous'] == true),
     );
   }
 }

@@ -1,32 +1,35 @@
 import 'dart:async';
 
+import 'auth_service.dart';
 import 'community_service.dart';
+import 'connectivity_service.dart';
 import 'notes_repository.dart';
 import 'offline_queue.dart';
-import 'supabase_init.dart';
 
 /// Offline → online sync.
 ///
-/// Listens to [SupabaseInit.connectivityStream]; when the device comes
-/// back online it drains the [OfflineQueue] (SharedPreferences key
-/// 'offline-queue-v1') and replays the queued ops.
+/// Listens to [ConnectivityService.connectivityStream]; when the device
+/// comes back online it drains the [OfflineQueue] (SharedPreferences
+/// key 'offline-queue-v1') and replays the queued ops against the
+/// custom backend.
 ///
-/// Replay is implemented for op types 'message', 'note', 'report' and
-/// 'block':
-///   - 'message' → CommunityService (text / photo / voice / poll).
-///     The 'flaggedOriginal' field is stripped before replay — it lives
+/// Replay is implemented for op types 'message', 'note' and 'report':
+///   - 'message' → CommunityService (text / photo / poll). The
+///     'flaggedOriginal' field is stripped before replay — it lives
 ///     only in the local queue and is never uploaded.
 ///   - 'note' → NotesRepository.saveNote.
-///   - 'report' → CommunityService.report (inserts the report row).
-///   - 'block' → CommunityService.blockUser.
-/// Group creation sync is still a TODO — only the op types above replay;
-/// offline-created groups stay local until that is built.
+///   - 'report' → CommunityService.report.
+/// Voice messages and blocks are NOT replayed: voice recording was a
+/// UI stub with no backend storage, and blocking is local-only now —
+/// a queued 'block' op is dropped (it is already applied locally).
+/// Group creation sync is still a TODO — only the op types above
+/// replay; offline-created groups stay local until that is built.
 ///
 /// [isOfflineStream] emits true while the device is offline, for the UI
 /// offline indicator.
 class SyncService {
   SyncService._() {
-    _subscription = SupabaseInit.connectivityStream.listen((online) {
+    _subscription = ConnectivityService.connectivityStream.listen((online) {
       if (online) {
         unawaited(syncNow());
       }
@@ -46,19 +49,20 @@ class SyncService {
   }
 
   /// Emits the online state (true = online).
-  Stream<bool> get onlineStream => SupabaseInit.connectivityStream;
+  Stream<bool> get onlineStream => ConnectivityService.connectivityStream;
 
   /// Emits true while the device is offline (for the UI indicator).
   Stream<bool> get isOfflineStream =>
-      SupabaseInit.connectivityStream.map((online) => !online);
+      ConnectivityService.connectivityStream.map((online) => !online);
 
   /// Drains the offline queue now. Safe to call while offline (no-op
-  /// when there is no connection) and safe to call concurrently (a second
-  /// call while a sync is running returns immediately).
+  /// when there is no connection or no signed-in user — queued writes
+  /// need a JWT) and safe to call concurrently (a second call while a
+  /// sync is running returns immediately).
   Future<void> syncNow() async {
     if (_syncing) return;
-    if (!SupabaseInit.isOnlineMode) return;
-    if (!await SupabaseInit.isConnected) return;
+    if (!await ConnectivityService.isConnected) return;
+    if (!AuthService.instance.isSignedIn) return;
     _syncing = true;
     try {
       final queue = await CommunityService.loadQueue();
@@ -89,28 +93,15 @@ class SyncService {
       case 'message':
         // 'flaggedOriginal' is local-only: never uploaded.
         final messageType = op['messageType'] as String? ?? 'text';
-        final groupId = op['groupId'] as String?;
         switch (messageType) {
           case 'text':
             await CommunityService.instance.sendText(
               (op['text'] as String?) ?? '',
-              groupId: groupId,
             );
           case 'photo':
             final localPath = op['localPath'] as String?;
             if (localPath == null) return true;
-            await CommunityService.instance.sendPhoto(
-              localPath,
-              groupId: groupId,
-            );
-          case 'voice':
-            final localPath = op['localPath'] as String?;
-            if (localPath == null) return true;
-            await CommunityService.instance.sendVoice(
-              localPath,
-              (op['seconds'] as num?)?.toInt() ?? 0,
-              groupId: groupId,
-            );
+            await CommunityService.instance.sendPhoto(localPath);
           case 'poll':
             final poll = op['poll'];
             if (poll is! Map) return true;
@@ -121,10 +112,11 @@ class SyncService {
                       ?.map((e) => e.toString())
                       .toList() ??
                   [],
-              groupId: groupId,
             );
           default:
-            return true; // Unknown message kind — drop, don't loop forever.
+            // 'voice' was a UI stub (no backend storage) and any other
+            // unknown message kind — drop, don't loop forever.
+            return true;
         }
         return true;
       case 'note':
@@ -143,9 +135,8 @@ class SyncService {
         );
         return true;
       case 'block':
-        final targetUid = op['targetUid'] as String?;
-        if (targetUid == null) return true;
-        await CommunityService.instance.blockUser(targetUid);
+        // Blocking is local-only now and already applied when the op
+        // was queued — drop it.
         return true;
       default:
         // Unknown op type — kept in the queue so the action is not

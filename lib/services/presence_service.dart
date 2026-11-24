@@ -1,59 +1,47 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'supabase_init.dart';
+import 'api_client.dart';
+import 'auth_service.dart';
 
-/// Who is online in the community right now (Supabase Realtime
-/// Presence — the "active" state). The snapshot is the single source
-/// the community screen listens to; it never throws.
+/// Who is online in the community right now.
+///
+/// Polling, not Realtime: Vercel serverless has no WebSocket, so the
+/// client heartbeats POST /api/presence every 30 s (which stamps the
+/// user's `last_seen_at`) and polls GET /api/presence every 10 s for
+/// the users seen in the last 5 minutes. The snapshot is the single
+/// source the community screen listens to; it never throws.
+///
+/// Typing was dropped with the backend move: there is no typing
+/// column to write to, and a serverless function cannot push a
+/// "typing…" event. Online dots stay; the typing line is gone.
 class PresenceSnapshot {
-  const PresenceSnapshot({
-    this.onlineUids = const {},
-    this.typingNames = const [],
-  });
+  const PresenceSnapshot({this.onlineUids = const {}});
 
-  /// Uids currently tracked on the presence channel (includes self).
+  /// Uids seen in the last 5 minutes (includes self).
   final Set<String> onlineUids;
 
-  /// Display names of OTHER users who are typing right now.
-  final List<String> typingNames;
-
-  /// Pure parse of a Realtime presence state, so it is unit-tested
-  /// without a socket. Each presence payload carries `uid`, `name`
-  /// and `typing`.
-  static PresenceSnapshot fromStates(
-    List<SinglePresenceState> states,
-    String selfUid,
-  ) {
+  /// Pure parse of the GET /api/presence rows, so it is unit-tested
+  /// without a network call. Each row carries `id` (+ display name
+  /// and `last_seen_at`, which the dots do not need).
+  static PresenceSnapshot fromApi(List<dynamic> rows) {
     final online = <String>{};
-    final typing = <String>[];
-    for (final state in states) {
-      for (final presence in state.presences) {
-        final uid = presence.payload['uid']?.toString();
-        if (uid == null || uid.isEmpty) continue;
-        online.add(uid);
-        if (uid != selfUid && presence.payload['typing'] == true) {
-          final name =
-              presence.payload['name']?.toString() ?? 'Someone';
-          if (name.isNotEmpty && !typing.contains(name)) {
-            typing.add(name);
-          }
-        }
+    for (final row in rows) {
+      if (row is Map) {
+        final id = row['id']?.toString();
+        if (id != null && id.isNotEmpty) online.add(id);
       }
     }
-    return PresenceSnapshot(onlineUids: online, typingNames: typing);
+    return PresenceSnapshot(onlineUids: online);
   }
 }
 
-/// Tracks this device on the `community-presence` Realtime channel
-/// and exposes who else is online / typing.
+/// Heartbeats + polls presence while the community screen is open.
 ///
-/// Fail-soft by design: presence rides the same Realtime socket as
-/// the message feed. If the socket is unreachable (offline, or the
-/// project host is blocked on this network) the snapshot simply stays
-/// empty — the feed and the rest of the app keep working.
+/// Fail-soft by design: a failed heartbeat or poll is swallowed and
+/// the snapshot simply stays as it was — the feed and the rest of the
+/// app keep working.
 class PresenceService {
   PresenceService._();
 
@@ -63,97 +51,52 @@ class PresenceService {
   final ValueNotifier<PresenceSnapshot> notifier =
       ValueNotifier(const PresenceSnapshot());
 
-  RealtimeChannel? _channel;
-  String? _uid;
-  String _name = 'Student';
-  bool _typing = false;
-  Timer? _typingTimer;
+  Timer? _heartbeatTimer;
+  Timer? _pollTimer;
+  bool _active = false;
 
-  bool get isActive => _channel != null;
+  bool get isActive => _active;
 
-  /// Joins the presence channel as [uid] ([name] is shown in the
-  /// "X is typing…" line). No-op while offline or already joined.
-  Future<void> start({required String uid, required String name}) async {
-    if (_channel != null) return;
-    if (!SupabaseInit.isOnlineMode) return;
-    _uid = uid;
-    _name = name.isEmpty ? 'Student' : name;
+  /// Starts heartbeating + polling. No-op when already started.
+  /// Only heartbeats while signed in (POST /api/presence needs a
+  /// JWT); the online list itself is public.
+  Future<void> start() async {
+    if (_active) return;
+    _active = true;
+    await _beat();
+    _heartbeatTimer =
+        Timer.periodic(const Duration(seconds: 30), (_) => unawaited(_beat()));
+    _pollTimer =
+        Timer.periodic(const Duration(seconds: 10), (_) => unawaited(_refresh()));
+    await _refresh();
+  }
+
+  Future<void> _beat() async {
+    if (!AuthService.instance.isSignedIn) return;
     try {
-      final channel = SupabaseInit.client.channel('community-presence');
-      channel.onPresenceSync((_) => _refresh());
-      channel.subscribe();
-      _channel = channel;
-      await channel.track(_payload(false));
+      await ApiClient.instance.post('/api/presence', auth: true);
     } catch (_) {
-      // Presence is best effort; never break the screen.
-      _channel = null;
+      // Best effort; the next heartbeat retries.
     }
   }
 
-  Map<String, dynamic> _payload(bool typing) => {
-        'uid': _uid,
-        'name': _name,
-        'typing': typing,
-      };
-
-  void _refresh() {
-    final channel = _channel;
-    if (channel == null) return;
+  Future<void> _refresh() async {
     try {
-      notifier.value =
-          PresenceSnapshot.fromStates(channel.presenceState(), _uid ?? '');
+      final res = await ApiClient.instance.get('/api/presence');
+      final rows = (res['online'] as List?) ?? [];
+      notifier.value = PresenceSnapshot.fromApi(rows);
     } catch (_) {
-      // Keep the last snapshot on a parse failure.
+      // Keep the last snapshot on any failure.
     }
   }
 
-  /// Call on every composer keystroke. Marks this user typing and
-  /// clears it again 3 seconds after the last keystroke.
-  void setTyping() {
-    if (_channel == null || _uid == null) return;
-    if (!_typing) {
-      _typing = true;
-      _track();
-    }
-    _typingTimer?.cancel();
-    _typingTimer = Timer(const Duration(seconds: 3), () {
-      _typing = false;
-      _track();
-    });
-  }
-
-  /// Call when a message is sent: typing ends at once.
-  void clearTyping() {
-    _typingTimer?.cancel();
-    if (_typing) {
-      _typing = false;
-      _track();
-    }
-  }
-
-  void _track() {
-    try {
-      _channel?.track(_payload(_typing));
-    } catch (_) {
-      // Best effort.
-    }
-  }
-
-  /// Leaves the channel and resets the snapshot.
+  /// Stops both timers and resets the snapshot.
   Future<void> stop() async {
-    _typingTimer?.cancel();
-    _typing = false;
-    final channel = _channel;
-    _channel = null;
-    _uid = null;
-    if (channel != null) {
-      try {
-        await channel.untrack();
-      } catch (_) {}
-      try {
-        await SupabaseInit.client.removeChannel(channel);
-      } catch (_) {}
-    }
+    _heartbeatTimer?.cancel();
+    _pollTimer?.cancel();
+    _heartbeatTimer = null;
+    _pollTimer = null;
+    _active = false;
     notifier.value = const PresenceSnapshot();
   }
 }
