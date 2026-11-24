@@ -55,6 +55,18 @@ function match(method, segments) {
 }
 
 module.exports = function route(req, res) {
+  // CORS: the Flutter web app calls this API from the browser, so every
+  // response must carry Access-Control headers or the browser blocks the
+  // call outright (the app then reports it as "No internet connection").
+  // Auth is via Bearer token (no cookies), so `*` is safe here.
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  // Preflight: the browser sends OPTIONS before POSTs with a JSON body
+  // or an Authorization header. Answer it here, before route matching.
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
   const url = new URL(req.url, 'http://localhost');
   const segments = url.pathname.split('/').filter(Boolean);
   const found = match(req.method, segments);
