@@ -74,7 +74,6 @@ class _SettingsBodyState extends State<_SettingsBody> {
   bool _loaded = false;
   bool _notifMilestone = true;
   bool _notifReminder = true;
-  bool _notifReplies = true;
   String _fontSize = 'medium';
   String _lang = 'en';
 
@@ -90,7 +89,6 @@ class _SettingsBodyState extends State<_SettingsBody> {
     setState(() {
       _notifMilestone = prefs.getBool('notif-milestone') ?? true;
       _notifReminder = prefs.getBool('notif-reminder') ?? true;
-      _notifReplies = prefs.getBool('notif-replies') ?? true;
       _fontSize = prefs.getString('font-size') ?? 'medium';
       _lang = prefs.getString('app-lang') ?? 'en';
       SettingsScreen.fontScale = SettingsScreen._fontScales[_fontSize] ?? 1.0;
@@ -248,16 +246,6 @@ class _SettingsBodyState extends State<_SettingsBody> {
           onChanged: (v) {
             setState(() => _notifReminder = v);
             _saveBool('notif-reminder', v);
-          },
-        ),
-        const SizedBox(height: 12),
-        _switchRow(
-          label: 'Community replies',
-          hint: 'When someone replies to your message.',
-          value: _notifReplies,
-          onChanged: (v) {
-            setState(() => _notifReplies = v);
-            _saveBool('notif-replies', v);
           },
         ),
         _sectionTitle(context, 'Font size'),

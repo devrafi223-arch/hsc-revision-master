@@ -12,20 +12,16 @@ import '../tracker_store.dart';
 import '../widgets/milestone_celebration.dart';
 import 'auth_screen.dart';
 
-/// Own profile + viewing others. `userId == null` means "my profile".
-///
-/// Visibility rules (enforced here, in the UI):
-/// - locked + not yours + you don't follow them -> "This profile is locked"
-/// - restricted + not yours -> name + overall progress % only
-/// - public (or yours) -> full details.
+/// Your own account screen — photo, name, progress, milestones,
+/// badges. There is no community left in the app, so there is no
+/// viewing other people, no follow button and no profile privacy
+/// here; this is just your account.
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key, this.userId, this.showAppBar = true});
-
-  final String? userId;
+  const ProfileScreen({super.key, this.showAppBar = true});
 
   /// False when embedded as a tab (the HomeScreen AppBar + NavigationBar
-  /// already wrap it); true when pushed on its own (e.g. from the
-  /// community leaderboard), where it needs its own AppBar + back button.
+  /// already wrap it); true when pushed on its own, where it needs its
+  /// own AppBar + back button.
   final bool showAppBar;
 
   @override
@@ -35,20 +31,15 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   final TrackerStore _store = TrackerStore();
   bool _storeLoaded = false;
-  AppUser? _ownUser;
-  String _privacy = 'public';
-  String _photoVisibility = 'all';
 
   String? get _uid => AuthService.instance.currentUid;
-  bool get _isOwn => widget.userId == null || widget.userId == _uid;
-  String? get _targetUid => widget.userId ?? _uid;
 
   bool _photoBusy = false;
 
   /// Picks a photo, uploads it via POST /api/upload?kind=profile and
-  /// sets it as this profile's photo (own profile only).
+  /// sets it as this profile's photo.
   Future<void> _changePhoto() async {
-    final uid = _targetUid;
+    final uid = _uid;
     if (uid == null || _photoBusy) return;
     setState(() => _photoBusy = true);
     try {
@@ -84,11 +75,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _store.load().then((_) {
       if (mounted) setState(() => _storeLoaded = true);
     });
-    if (!_isOwn && _uid != null) {
-      UserRepository.instance.getUser(_uid!).then((user) {
-        if (mounted) setState(() => _ownUser = user);
-      });
-    }
   }
 
   /// 0-based index of [ref] among its subject's chapters, as
@@ -135,69 +121,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return (done * 100 / total).round();
   }
 
-  Future<void> _follow(AppUser target) async {
-    final uid = _uid;
-    if (uid == null) {
-      // No guest mode: go to the login screen.
-      if (!mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const AuthScreen()),
-      );
-      return;
-    }
-    try {
-      await UserRepository.instance.follow(uid, target.id);
-      final refreshed = await UserRepository.instance.getUser(uid);
-      if (mounted) setState(() => _ownUser = refreshed);
-    } catch (e) {
-      await _showInfo(e.toString());
-    }
-  }
-
-  Future<void> _showInfo(String message) async {
-    if (!mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _updatePrivacy({
-    String? profileVisibility,
-    String? photoVisibility,
-  }) async {
-    final uid = _uid;
-    if (uid == null) return;
-    setState(() {
-      if (profileVisibility != null) _privacy = profileVisibility;
-      if (photoVisibility != null) _photoVisibility = photoVisibility;
-    });
-    try {
-      await UserRepository.instance.updatePrivacy(
-        uid,
-        profileVisibility: profileVisibility,
-        photoVisibility: photoVisibility,
-      );
-    } catch (e) {
-      await _showInfo(e.toString());
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final targetUid = _targetUid;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final base = Theme.of(context).textTheme.bodyMedium!;
-    final muted = isDark ? JimColors.darkMuted : JimColors.muted;
-    if (targetUid == null) {
+    final uid = _uid;
+    if (uid == null) {
       // No guest mode: without a signed-in user this screen routes
       // straight to the login screen (the app root normally gates
       // here first, so this is only a safety net).
@@ -207,126 +134,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
     }
     final content = StreamBuilder<AppUser?>(
-      stream: UserRepository.instance.userStream(targetUid),
+      stream: UserRepository.instance.userStream(uid),
       builder: (context, snapshot) {
         if (!snapshot.hasData &&
             snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
-        final user = snapshot.data;
-        if (user == null) {
-          // No profile doc yet (e.g. signed in but never saved):
-          // fall back to the local tracker for your own profile.
-          if (!_isOwn) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text(
-                  'Profile not found.',
-                  style: base.copyWith(
-                    fontSize: 15,
-                    color: muted,
-                    height: 1.45,
-                  ),
-                ),
-              ),
-            );
-          }
-          return _ProfileBody(
-            user: AppUser(
-              id: targetUid,
+        final user = snapshot.data ??
+            AppUser(
+              id: uid,
               name: AuthService.instance.currentUser?.name ?? 'Student',
               email: AuthService.instance.currentUser?.email ?? '',
               photoUrl: AuthService.instance.currentUser?.photoUrl,
-            ),
-            isOwn: true,
-            storeLoaded: _storeLoaded,
-            store: _store,
-            subjectPct: _subjectPct,
-            earnedMilestones: _earnedMilestones(),
-            privacy: _privacy,
-            photoVisibility: _photoVisibility,
-            following: false,
-            onFollow: () {},
-            onPrivacy: _updatePrivacy,
-            onChangePhoto: _changePhoto,
-            photoBusy: _photoBusy,
-          );
-        }
-        if (_isOwn &&
-            _privacy == 'public' &&
-            user.profileVisibility != _privacy) {
-          // First load: reflect the stored privacy in the controls.
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              setState(() {
-                _privacy = user.profileVisibility;
-                _photoVisibility = user.photoVisibility;
-              });
-            }
-          });
-        }
-        final following = _ownUser?.followingIds.contains(user.id) ?? false;
-        if (!_isOwn && user.profileVisibility == 'locked' && !following) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(
-                    Icons.lock,
-                    size: 36,
-                    color: JimColors.rose,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'This profile is locked',
-                    style: base.copyWith(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '${user.name} keeps this profile private. Follow them to see more.',
-                    textAlign: TextAlign.center,
-                    style: base.copyWith(
-                      fontSize: 15,
-                      color: muted,
-                      height: 1.45,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  FilledButton(
-                    onPressed: () => _follow(user),
-                    style: FilledButton.styleFrom(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                    child: const Text('Follow'),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
+            );
         return _ProfileBody(
           user: user,
-          isOwn: _isOwn,
           storeLoaded: _storeLoaded,
           store: _store,
           subjectPct: _subjectPct,
           earnedMilestones: _earnedMilestones(),
-          privacy: _privacy,
-          photoVisibility: _photoVisibility,
-          following: following,
-          onFollow: () => _follow(user),
-          onPrivacy: _updatePrivacy,
           onChangePhoto: _changePhoto,
           photoBusy: _photoBusy,
-          restrictedView: !_isOwn && user.profileVisibility == 'restricted',
         );
       },
     );
@@ -341,44 +169,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
 class _ProfileBody extends StatelessWidget {
   const _ProfileBody({
     required this.user,
-    required this.isOwn,
     required this.storeLoaded,
     required this.store,
     required this.subjectPct,
     required this.earnedMilestones,
-    required this.privacy,
-    required this.photoVisibility,
-    required this.following,
-    required this.onFollow,
-    required this.onPrivacy,
     this.onChangePhoto,
     this.photoBusy = false,
-    this.restrictedView = false,
   });
 
   final AppUser user;
-  final bool isOwn;
   final bool storeLoaded;
   final TrackerStore store;
   final int Function(Subject) subjectPct;
   final List<Milestone> earnedMilestones;
-  final String privacy;
-  final String photoVisibility;
-  final bool following;
-  final VoidCallback onFollow;
-  final Future<void> Function({
-    String? profileVisibility,
-    String? photoVisibility,
-  }) onPrivacy;
 
-  /// Own profile only: opens the gallery to change the photo.
-  /// Null on other people's profiles (no button shown).
+  /// Opens the gallery to change the photo.
   final VoidCallback? onChangePhoto;
 
   /// True while a photo upload is in flight.
   final bool photoBusy;
-
-  final bool restrictedView;
 
   @override
   Widget build(BuildContext context) {
@@ -391,7 +200,6 @@ class _ProfileBody extends StatelessWidget {
       streak: user.streak,
       totalChapters: user.totalChaptersDone,
     );
-    final showPhoto = isOwn || user.photoVisibility == 'all';
     return ListView(
       padding: const EdgeInsets.fromLTRB(0, 0, 0, 24),
       children: [
@@ -427,40 +235,39 @@ class _ProfileBody extends StatelessWidget {
                   children: [
                     Container(
                       width: 88,
-                  height: 88,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: JimColors.rose,
-                    border: Border.all(
-                      color: isDark ? JimColors.darkBg : JimColors.paper,
-                      width: 4,
+                      height: 88,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: JimColors.rose,
+                        border: Border.all(
+                          color: isDark ? JimColors.darkBg : JimColors.paper,
+                          width: 4,
+                        ),
+                        image: user.photoUrl != null &&
+                                user.photoUrl!.isNotEmpty
+                            ? DecorationImage(
+                                image: NetworkImage(user.photoUrl!),
+                                fit: BoxFit.cover,
+                                onError: (_, __) {},
+                              )
+                            : null,
+                      ),
+                      child: (user.photoUrl == null ||
+                              user.photoUrl!.isEmpty)
+                          ? Text(
+                              user.name.isNotEmpty
+                                  ? user.name[0].toUpperCase()
+                                  : '?',
+                              style: const TextStyle(
+                                fontSize: 32,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
+                            )
+                          : null,
                     ),
-                    image: showPhoto &&
-                            user.photoUrl != null &&
-                            user.photoUrl!.isNotEmpty
-                        ? DecorationImage(
-                            image: NetworkImage(user.photoUrl!),
-                            fit: BoxFit.cover,
-                            onError: (_, __) {},
-                          )
-                        : null,
-                  ),
-                  child: showPhoto &&
-                          (user.photoUrl == null || user.photoUrl!.isEmpty)
-                      ? Text(
-                          user.name.isNotEmpty
-                              ? user.name[0].toUpperCase()
-                              : '?',
-                          style: const TextStyle(
-                            fontSize: 32,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        )
-                      : null,
-                    ),
-                    if (isOwn && onChangePhoto != null)
+                    if (onChangePhoto != null)
                       Positioned(
                         right: 0,
                         bottom: 0,
@@ -535,230 +342,76 @@ class _ProfileBody extends StatelessWidget {
                             fontWeight: FontWeight.w600,
                           ),
                         ),
-                        const Spacer(),
-                        if (!isOwn)
-                          FilledButton(
-                            onPressed: following ? null : onFollow,
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 8,
-                              ),
-                              shape: const StadiumBorder(),
-                            ),
-                            child: Text(
-                              following ? 'Following' : 'Follow',
-                            ),
-                          ),
                       ],
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 8),
-              if (restrictedView)
-                Text(
-                  'This profile is restricted — only the name and overall progress are visible.',
-                  style: base.copyWith(
-                    fontSize: 14,
-                    color: muted,
-                    height: 1.45,
-                  ),
-                )
-              else ...[
-                Text(
-                  'Progress by subject',
-                  style: base.copyWith(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
+              Text(
+                'Progress by subject',
+                style: base.copyWith(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (!storeLoaded)
+                const CircularProgressIndicator()
+              else
+                ...syllabusData.map(
+                  (subject) => _SubjectBar(
+                    label: subject.nameEn,
+                    pct: subjectPct(subject),
                   ),
                 ),
-                const SizedBox(height: 12),
-                if (!storeLoaded && isOwn)
-                  const CircularProgressIndicator()
-                else if (isOwn)
-                  ...syllabusData.map(
-                    (subject) => _SubjectBar(
-                      label: subject.nameEn,
-                      pct: subjectPct(subject),
-                    ),
-                  )
-                else
-                  _SubjectBar(
-                    label: 'Overall',
-                    pct: overallPct,
-                  ),
+              const SizedBox(height: 24),
+              Text(
+                'Milestones',
+                style: base.copyWith(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 12),
+              MilestoneList(milestones: earnedMilestones),
+              if (badges.isNotEmpty) ...[
                 const SizedBox(height: 24),
                 Text(
-                  'Milestones',
+                  'Badges',
                   style: base.copyWith(
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 12),
-                if (isOwn)
-                  MilestoneList(milestones: earnedMilestones)
-                else if (user.milestoneIds.isEmpty)
-                  Text(
-                    'No milestones shared yet.',
-                    style: base.copyWith(
-                      fontSize: 14,
-                      color: muted,
-                      height: 1.45,
-                    ),
-                  )
-                else
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: user.milestoneIds
-                        .map(
-                          (id) => Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 10,
-                            ),
-                            decoration: BoxDecoration(
-                              color: JimColors.rose.withValues(
-                                alpha: isDark ? 0.18 : 0.08,
-                              ),
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                color: JimColors.rose.withValues(
-                                  alpha: 0.35,
-                                ),
-                              ),
-                            ),
-                            child: Text(
-                              id,
-                              style: base.copyWith(
-                                fontSize: 13,
-                                height: 1.45,
-                              ),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: badges
+                      .map(
+                        (badge) => Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? JimColors.darkSurface
+                                : JimColors.card,
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: line),
+                          ),
+                          child: Text(
+                            badge,
+                            style: base.copyWith(
+                              fontSize: 13,
+                              height: 1.45,
                             ),
                           ),
-                        )
-                        .toList(),
-                  ),
-                if (badges.isNotEmpty) ...[
-                  const SizedBox(height: 24),
-                  Text(
-                    'Badges',
-                    style: base.copyWith(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: badges
-                        .map(
-                          (badge) => Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 10,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isDark
-                                  ? JimColors.darkSurface
-                                  : JimColors.card,
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(color: line),
-                            ),
-                            child: Text(
-                              badge,
-                              style: base.copyWith(
-                                fontSize: 13,
-                                height: 1.45,
-                              ),
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ],
-              ],
-              if (isOwn) ...[
-                const SizedBox(height: 24),
-                Text(
-                  'Privacy',
-                  style: base.copyWith(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Who can see your profile',
-                  style: base.copyWith(fontSize: 14, color: muted),
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment<String>(
-                        value: 'public',
-                        label: Text('Public'),
-                      ),
-                      ButtonSegment<String>(
-                        value: 'restricted',
-                        label: Text('Restricted'),
-                      ),
-                      ButtonSegment<String>(
-                        value: 'locked',
-                        label: Text('Locked'),
-                      ),
-                    ],
-                    selected: {privacy},
-                    onSelectionChanged: (selection) {
-                      onPrivacy(profileVisibility: selection.first);
-                    },
-                    style: SegmentedButton.styleFrom(
-                      backgroundColor:
-                          isDark ? JimColors.darkLine : JimColors.line,
-                      selectedBackgroundColor:
-                          isDark ? JimColors.darkSurface : JimColors.card,
-                      selectedForegroundColor:
-                          isDark ? JimColors.darkText : JimColors.ink,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Who can see your photo',
-                  style: base.copyWith(fontSize: 14, color: muted),
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment<String>(
-                        value: 'all',
-                        label: Text('All'),
-                      ),
-                      ButtonSegment<String>(
-                        value: 'onlyMe',
-                        label: Text('Only me'),
-                      ),
-                    ],
-                    selected: {photoVisibility},
-                    onSelectionChanged: (selection) {
-                      onPrivacy(photoVisibility: selection.first);
-                    },
-                    style: SegmentedButton.styleFrom(
-                      backgroundColor:
-                          isDark ? JimColors.darkLine : JimColors.line,
-                      selectedBackgroundColor:
-                          isDark ? JimColors.darkSurface : JimColors.card,
-                      selectedForegroundColor:
-                          isDark ? JimColors.darkText : JimColors.ink,
-                    ),
-                  ),
+                        ),
+                      )
+                      .toList(),
                 ),
               ],
             ],

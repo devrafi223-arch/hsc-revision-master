@@ -88,9 +88,8 @@ class AdminService {
     }
   }
 
-  /// Deletes a user (their messages and milestones are deleted with
-  /// them server-side). Never self — the server enforces it and
-  /// answers 400. Throws [ApiException] on failure.
+  /// Deletes a user server-side. Never self — the server enforces it
+  /// and answers 400. Throws [ApiException] on failure.
   Future<void> deleteUser(String id) async {
     await ApiClient.instance.delete('/api/admin/users', query: {'id': id});
   }

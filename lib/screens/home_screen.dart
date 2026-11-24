@@ -19,8 +19,6 @@ import '../widgets/milestone_celebration.dart';
 import '../widgets/pomodoro_timer.dart';
 import '../widgets/weekly_chart.dart';
 import 'chapter_note_sheet.dart';
-import 'community_screen.dart';
-import 'groups_screen.dart';
 import 'profile_screen.dart';
 import 'settings_screen.dart';
 
@@ -175,10 +173,9 @@ class _HomeScreenState extends State<HomeScreen> {
         ref.chapter.title,
         index,
       );
-      // Mirror the completion to the server (leaderboard +
-      // chapters_done). Best effort, never throws, and it runs even
-      // with alerts off — the early return below is only about the
-      // celebration UI.
+      // Mirror the completion to the server (per-user chapters_done).
+      // Best effort, never throws, and it runs even with alerts off —
+      // the early return below is only about the celebration UI.
       unawaited(
         ProgressService.recordChapterDone(
           chapterId: chapterId,
@@ -253,12 +250,6 @@ class _HomeScreenState extends State<HomeScreen> {
           onResetAll: _resetAll,
         ),
       ),
-    );
-  }
-
-  void _openGroups() {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const GroupsScreen()),
     );
   }
 
@@ -415,7 +406,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               milestones: _earnedMilestones(),
                               onToggleStage: _toggleStage,
                               onOpenSettings: _openSettings,
-                              onOpenGroups: _openGroups,
                             ),
                             _AllTab(
                               store: _store,
@@ -430,7 +420,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               onStatus: (s) => setState(() => _status = s),
                               onToggleStage: _toggleStage,
                             ),
-                            const CommunityScreen(),
                             const ProfileScreen(showAppBar: false),
                           ],
                         )
@@ -487,10 +476,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 NavigationDestination(
                   icon: Icon(Icons.book),
                   label: 'All chapters',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.group),
-                  label: 'Community',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.person),
@@ -955,7 +940,6 @@ class _TodayTab extends StatelessWidget {
     required this.milestones,
     required this.onToggleStage,
     required this.onOpenSettings,
-    required this.onOpenGroups,
   });
 
   final TrackerStore store;
@@ -969,14 +953,13 @@ class _TodayTab extends StatelessWidget {
   final ValueChanged<String> onRemoveTodo;
   final List<Milestone> milestones;
   final Future<void> Function(String, String) onToggleStage;
-  final VoidCallback onOpenSettings, onOpenGroups;
+  final VoidCallback onOpenSettings;
 
   @override
   Widget build(BuildContext context) {
     final base = Theme.of(context).textTheme.bodyMedium!;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted = isDark ? JimColors.darkMuted : JimColors.muted;
-    final line = isDark ? JimColors.darkLine : JimColors.line;
     return ListView(
       padding: const EdgeInsets.fromLTRB(0, 8, 0, _pagePadding),
       children: [
@@ -1059,12 +1042,6 @@ class _TodayTab extends StatelessWidget {
                 icon: Icons.settings,
                 label: 'Settings',
                 onTap: onOpenSettings,
-              ),
-              Container(height: 1, color: line),
-              _MoreRow(
-                icon: Icons.group,
-                label: 'Groups',
-                onTap: onOpenGroups,
               ),
             ],
           ),

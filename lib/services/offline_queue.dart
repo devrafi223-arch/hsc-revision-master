@@ -1,12 +1,35 @@
 import 'dart:convert';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 /// In-memory queue of operations made while offline, persisted as JSON in
-/// SharedPreferences under key 'offline-queue-v1' (see CommunityService /
-/// SyncService). Each op is a plain JSON-safe map, e.g.
-/// `{'type': 'message', 'text': '...', ...}` or `{'type': 'note', ...}`.
+/// SharedPreferences under key 'offline-queue-v1' (see SyncService).
+/// Each op is a plain JSON-safe map, e.g. `{'type': 'note', ...}`.
 /// Pure Dart — no Firebase.
 class OfflineQueue {
   OfflineQueue();
+
+  /// SharedPreferences key holding the offline queue JSON.
+  static const String queueKey = 'offline-queue-v1';
+
+  /// Loads the persisted queue (empty when nothing was stored).
+  static Future<OfflineQueue> loadQueue() async {
+    final prefs = await SharedPreferences.getInstance();
+    return OfflineQueue.fromJsonString(prefs.getString(queueKey) ?? '');
+  }
+
+  static Future<void> persistQueue(OfflineQueue queue) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(queueKey, queue.toJson());
+  }
+
+  /// Enqueues one op into the persisted offline queue, for replay by
+  /// SyncService when the device is back online.
+  static Future<void> enqueueOp(Map<String, dynamic> op) async {
+    final queue = await loadQueue();
+    queue.enqueue(op);
+    await persistQueue(queue);
+  }
 
   final List<Map<String, dynamic>> _pending = [];
 

@@ -17,9 +17,8 @@ import 'api_client.dart';
 /// a 401 clears the token and forces login.
 ///
 /// There is NO anonymous / guest mode (Rafi, 2026-11-24): without a
-/// valid JWT the app shows the login screen. Community authorship
-/// always comes from the JWT user — never a local "Student" string —
-/// and every backend feature requires the JWT.
+/// valid JWT the app shows the login screen, and every backend
+/// feature requires the JWT.
 class AuthService {
   AuthService._();
 

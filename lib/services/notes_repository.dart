@@ -6,7 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api_client.dart';
 import 'auth_service.dart';
-import 'community_service.dart';
+import 'offline_queue.dart';
 
 /// Per-chapter special notes: text, photo, or text + photo, saved per
 /// chapter to help next-time revision.
@@ -100,7 +100,7 @@ class NotesRepository {
       );
     } on ApiException catch (e) {
       if (e.code == 'NETWORK') {
-        await CommunityService.enqueueOp({
+        await OfflineQueue.enqueueOp({
           'type': 'note',
           'chapterId': chapterId,
           'text': text,

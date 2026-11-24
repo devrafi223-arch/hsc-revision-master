@@ -1,21 +1,16 @@
 // HSC Revision Master v3 — pure-logic tests (no Firebase, no I/O).
 //
-// Covers: Milestones naming + badges, PollData one-vote rule + round-trip,
-// DailyPlan per-day math, OfflineQueue, Moderation, CommunityMessage
-// anonymity, and the Milestone model round-trip.
-//
-// NOTE: this file imports flutter_test only. The models under test
-// (community_message.dart, milestone.dart) import cloud_firestore
-// transitively for the Timestamp type, but no Firebase API is called here.
+// Covers: Milestones naming + badges, DailyPlan per-day math,
+// OfflineQueue, and the Milestone model round-trip.
+// (Community is gone: the PollData / Moderation / CommunityMessage
+// sections were deleted with it.)
 
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hsc_revision_master/data/syllabus.dart';
 import 'package:hsc_revision_master/milestones.dart';
-import 'package:hsc_revision_master/models/community_message.dart';
 import 'package:hsc_revision_master/models/milestone.dart';
-import 'package:hsc_revision_master/services/moderation.dart';
 import 'package:hsc_revision_master/services/offline_queue.dart';
 import 'package:hsc_revision_master/target_plan.dart';
 
@@ -96,77 +91,7 @@ void main() {
   });
 
   // ------------------------------------------------------------------
-  // 3. Poll one-vote rule + counts / percentages
-  // ------------------------------------------------------------------
-  group('PollData voting', () {
-    PollData buildPoll({Map<String, int>? votes}) => PollData(
-          id: 'poll-1',
-          question: 'Which chapter next?',
-          options: ['Physics', 'Chemistry', 'Biology'],
-          votes: votes,
-        );
-
-    test('voting twice by the same user overwrites instead of adding',
-        () {
-      final votes = <String, int>{};
-      votes['user-1'] = 0; // first vote: Physics
-      votes['user-1'] = 1; // re-vote: Chemistry (overwrites)
-      final poll = buildPoll(votes: votes);
-      expect(poll.votes.length, 1);
-      expect(poll.votes['user-1'], 1);
-      expect(poll.counts, [0, 1, 0]);
-      expect(poll.counts.reduce((a, b) => a + b), 1,
-          reason: 'counts sum to the number of distinct voters');
-    });
-
-    test('counts and percentages sum correctly when everyone voted',
-        () {
-      final poll = buildPoll(votes: {
-        'u1': 0,
-        'u2': 0,
-        'u3': 1,
-        'u4': 2,
-      });
-      expect(poll.counts, [2, 1, 1]);
-      expect(poll.counts.reduce((a, b) => a + b), 4);
-      expect(poll.percentages, [50.0, 25.0, 25.0]);
-      expect(
-        poll.percentages.reduce((a, b) => a + b),
-        closeTo(100.0, 0.001),
-      );
-    });
-
-    test('percentages are all 0 when nobody has voted', () {
-      final poll = buildPoll();
-      expect(poll.counts, [0, 0, 0]);
-      expect(poll.percentages, [0.0, 0.0, 0.0]);
-      expect(
-        poll.percentages.reduce((a, b) => a + b),
-        0.0,
-      );
-    });
-  });
-
-  // ------------------------------------------------------------------
-  // 4. PollData toMap / fromMap round-trip
-  // ------------------------------------------------------------------
-  test('PollData toMap/fromMap round-trip preserves question, options, '
-      'and votes', () {
-    final original = PollData(
-      id: 'poll-9',
-      question: 'Best revision stage?',
-      options: ['Archive', 'Recall', 'MCQ'],
-      votes: {'u1': 0, 'u2': 2, 'u3': 2},
-    );
-    final restored = PollData.fromMap(original.toMap());
-    expect(restored.id, original.id);
-    expect(restored.question, original.question);
-    expect(restored.options, original.options);
-    expect(restored.votes, original.votes);
-  });
-
-  // ------------------------------------------------------------------
-  // 5. Per-day target math (DailyPlan)
+  // 3. Per-day target math (DailyPlan)
   // ------------------------------------------------------------------
   group('DailyPlan', () {
     final today = DateTime(2026, 11, 23);
@@ -269,13 +194,13 @@ void main() {
   });
 
   // ------------------------------------------------------------------
-  // 6. Offline queue
+  // 4. Offline queue
   // ------------------------------------------------------------------
   group('OfflineQueue', () {
     OfflineQueue buildQueue() {
       final queue = OfflineQueue();
-      queue.enqueue({'type': 'message', 'text': 'first'});
-      queue.enqueue({'type': 'message', 'text': 'second'});
+      queue.enqueue({'type': 'note', 'text': 'first'});
+      queue.enqueue({'type': 'note', 'text': 'second'});
       queue.enqueue({'type': 'note', 'text': 'third'});
       return queue;
     }
@@ -294,7 +219,7 @@ void main() {
       final decoded = jsonDecode(queue.toJson()) as List<dynamic>;
       final restored = OfflineQueue.fromJson(decoded);
       expect(restored.length, 3);
-      expect(restored.pending[0]['type'], 'message');
+      expect(restored.pending[0]['type'], 'note');
       expect(restored.pending[0]['text'], 'first');
       expect(restored.pending[1]['text'], 'second');
       expect(restored.pending[2]['type'], 'note');
@@ -319,115 +244,7 @@ void main() {
   });
 
   // ------------------------------------------------------------------
-  // 7. Moderation
-  // ------------------------------------------------------------------
-  group('Moderation', () {
-    test('flags a message containing a blocked word, case-insensitive',
-        () {
-      expect(Moderation.isFlagged('FREE MONEY here'), isTrue);
-      expect(Moderation.isFlagged('free money here'), isTrue);
-      expect(Moderation.isFlagged('Free Money here'), isTrue);
-    });
-
-    test('does not flag a normal revision message', () {
-      expect(
-        Moderation.isFlagged('Physics chapter 1 done'),
-        isFalse,
-      );
-      expect(
-        Moderation.flagReason('Physics chapter 1 done'),
-        isNull,
-      );
-    });
-
-    test('flagReason names the matched word', () {
-      final reason = Moderation.flagReason('FREE MONEY here');
-      expect(reason, isNotNull);
-      expect(reason, contains('free money'));
-    });
-  });
-
-  // ------------------------------------------------------------------
-  // 8. Community messages always show their author + photo encoding
-  // ------------------------------------------------------------------
-  group('CommunityMessage identity', () {
-    CommunityMessage buildMessage() => CommunityMessage(
-          id: 'msg-1',
-          authorId: 'user-42',
-          authorName: 'Rafi',
-          text: 'Physics chapter 1 done',
-          type: MessageType.text,
-          timestamp: DateTime.utc(2026, 11, 23, 12, 0),
-        );
-
-    test('round-trip preserves authorId, authorName and text', () {
-      final original = buildMessage();
-      // fromMap takes the doc id as a separate argument (it is not in
-      // the map); the id is the message id.
-      final restored = CommunityMessage.fromMap(
-        original.id,
-        original.toMap(),
-      );
-      expect(restored.authorId, 'user-42');
-      expect(restored.authorName, 'Rafi');
-      expect(restored.text, 'Physics chapter 1 done');
-      expect(
-        restored.timestamp.millisecondsSinceEpoch,
-        original.timestamp.millisecondsSinceEpoch,
-      );
-    });
-
-    test('a lone image URL as text becomes a photo message', () {
-      const url = 'https://example.blob.core.windows.net/notes/photo.jpg';
-      final message = CommunityMessage.fromMap('msg-2', {
-        'author_id': 'user-42',
-        'author_name': 'Rafi',
-        'text': url,
-        'created_at': '2026-11-24T07:00:00.000Z',
-      });
-      expect(message.type, MessageType.photo);
-      expect(message.photoUrl, url);
-      expect(message.text, isNull);
-    });
-
-    test('isImageUrl rejects text with spaces and non-image URLs', () {
-      expect(
-        CommunityMessage.isImageUrl('https://example.com/a.jpg'),
-        isTrue,
-      );
-      expect(
-        CommunityMessage.isImageUrl('https://example.com/a.jpg?x=1'),
-        isTrue,
-      );
-      expect(
-        CommunityMessage.isImageUrl('look at https://example.com/a.jpg'),
-        isFalse,
-      );
-      expect(
-        CommunityMessage.isImageUrl('https://example.com/page'),
-        isFalse,
-      );
-      expect(CommunityMessage.isImageUrl('hello'), isFalse);
-    });
-
-    test('backend poll votes {optionIndex: [uids]} invert to {uid: index}',
-        () {
-      final poll = PollData.fromMap({
-        'id': 'poll-1',
-        'question': 'Which subject first?',
-        'options': ['Physics', 'Chemistry'],
-        'votes': {
-          '0': ['u1', 'u2'],
-          '1': ['u3'],
-        },
-      });
-      expect(poll.votes, {'u1': 0, 'u2': 0, 'u3': 1});
-      expect(poll.counts, [2, 1]);
-    });
-  });
-
-  // ------------------------------------------------------------------
-  // 9. Milestone model round-trip
+  // 5. Milestone model round-trip
   // ------------------------------------------------------------------
   test('Milestone toMap/fromMap round-trip preserves id, name, subject, '
       'and chapterTitle', () {

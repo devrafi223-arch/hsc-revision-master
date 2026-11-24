@@ -1,7 +1,7 @@
 import 'api_client.dart';
 import 'auth_service.dart';
 
-/// Server-side chapter completion (leaderboard + `chapters_done`).
+/// Server-side chapter completion (per-user `chapters_done`).
 ///
 /// Best effort, never throws: the local tracker is the source of
 /// truth — the celebration and the local milestone already happened

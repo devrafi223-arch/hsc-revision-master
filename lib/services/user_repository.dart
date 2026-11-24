@@ -1,28 +1,20 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:shared_preferences/shared_preferences.dart';
-
 import '../models/app_user.dart';
 import 'api_client.dart';
 import 'auth_service.dart';
 
-/// Per-user profile data, backed by the custom backend.
+/// Per-user account data, backed by the custom backend.
 ///
 /// A single user is fetched via GET /api/users/:id (email is hidden
-/// unless it is my own row or I am an admin) and cached per id, so
-/// the community feed does not hit the network on every rebuild.
+/// unless it is my own row or I am an admin) and cached per id.
 /// [userStream] emits the cached row once (or the fetch result);
 /// there is no Realtime users table to subscribe to.
 ///
-/// The leaderboard comes from GET /api/leaderboard?range= (top 50;
-/// rows carry `score`). The weekly range counts milestones in the
-/// last 7 days, so it is a real activity leaderboard — not a
-/// snapshot of total chapters.
-///
-/// Follow and privacy are LOCAL-ONLY: the backend has no endpoint
-/// for them, so they live in the local cache and SharedPreferences
-/// ('followed-users-v1') and apply to the profile screen only.
+/// This is the signed-in user's own account screen data only — there
+/// is no community left in the app: no leaderboard, no following,
+/// no profile privacy.
 class UserRepository {
   UserRepository._();
 
@@ -71,97 +63,6 @@ class UserRepository {
     }
   }
 
-  /// Weekly top 50 by milestones in the last 7 days. Offline → [].
-  Future<List<AppUser>> leaderboardWeekly({int limit = 10}) async {
-    final users = await _leaderboard(range: 'weekly');
-    return users.take(limit).toList();
-  }
-
-  Future<List<AppUser>> leaderboardAll({int limit = 10}) async {
-    final users = await _leaderboard(range: 'all');
-    return users.take(limit).toList();
-  }
-
-  Future<List<AppUser>> _leaderboard({required String range}) async {
-    try {
-      final res = await ApiClient.instance.get(
-        '/api/leaderboard',
-        query: {'range': range},
-      );
-      final rows = (res['leaderboard'] as List?) ?? [];
-      return rows
-          .whereType<Map>()
-          .map((row) {
-            final map = row.cast<String, dynamic>();
-            return AppUser.fromMap(
-              (map['id'] as String?) ?? '',
-              map,
-            );
-          })
-          .where((u) => u.id.isNotEmpty)
-          .toList();
-    } catch (_) {
-      return [];
-    }
-  }
-
-  /// Follow is LOCAL-ONLY (no backend endpoint): [uid] follows
-  /// [targetUid] on this device.
-  Future<void> follow(String uid, String targetUid) async {
-    final me = _localCache[uid];
-    if (me != null && !me.followingIds.contains(targetUid)) {
-      _localCache[uid] = AppUser(
-        id: me.id,
-        name: me.name,
-        email: me.email,
-        photoUrl: me.photoUrl,
-        coverUrl: me.coverUrl,
-        profileVisibility: me.profileVisibility,
-        photoVisibility: me.photoVisibility,
-        isAdmin: me.isAdmin,
-        streak: me.streak,
-        totalChaptersDone: me.totalChaptersDone,
-        milestoneIds: me.milestoneIds,
-        followingIds: [...me.followingIds, targetUid],
-      );
-    }
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final followed = (prefs.getStringList('followed-users-v1') ?? [])
-          .toSet();
-      followed.add(targetUid);
-      await prefs.setStringList('followed-users-v1', followed.toList());
-    } catch (_) {
-      // Best effort; the in-memory cache above is kept.
-    }
-  }
-
-  /// Privacy is LOCAL-ONLY (no backend endpoint): the update is
-  /// applied to the cached user and kept for this session.
-  Future<void> updatePrivacy(
-    String uid, {
-    String? profileVisibility,
-    String? photoVisibility,
-  }) async {
-    final me = _localCache[uid];
-    if (me != null) {
-      _localCache[uid] = AppUser(
-        id: me.id,
-        name: me.name,
-        email: me.email,
-        photoUrl: me.photoUrl,
-        coverUrl: me.coverUrl,
-        profileVisibility: profileVisibility ?? me.profileVisibility,
-        photoVisibility: photoVisibility ?? me.photoVisibility,
-        isAdmin: me.isAdmin,
-        streak: me.streak,
-        totalChaptersDone: me.totalChaptersDone,
-        milestoneIds: me.milestoneIds,
-        followingIds: me.followingIds,
-      );
-    }
-  }
-
   /// Updates the cached photo for [uid]. The server photo is set by
   /// [uploadProfilePhoto] instead — this only refreshes the local
   /// cache so avatars update immediately.
@@ -174,13 +75,10 @@ class UserRepository {
         email: current.email,
         photoUrl: photoUrl,
         coverUrl: current.coverUrl,
-        profileVisibility: current.profileVisibility,
-        photoVisibility: current.photoVisibility,
         isAdmin: current.isAdmin,
         streak: current.streak,
         totalChaptersDone: current.totalChaptersDone,
         milestoneIds: current.milestoneIds,
-        followingIds: current.followingIds,
       );
     }
   }

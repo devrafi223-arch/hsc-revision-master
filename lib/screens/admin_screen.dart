@@ -13,8 +13,8 @@ import '../services/auth_service.dart';
 /// exist on the backend — the panel does not pretend they do.
 ///
 /// Users: newest first, 50 per page with a Load more button. Deleting
-/// a user removes them (and their messages/milestones) server-side;
-/// the admin can never delete themselves (the server answers 400).
+/// a user removes them server-side; the admin can never delete
+/// themselves (the server answers 400).
 class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key, this.onSignOut});
 
@@ -112,7 +112,7 @@ class _AdminScreenState extends State<AdminScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Delete this user?'),
         content: Text(
-          '${user.name} (${user.email}) will be removed, along with their messages and milestones. This cannot be undone.',
+          '${user.name} (${user.email}) will be removed. This cannot be undone.',
         ),
         actions: [
           TextButton(

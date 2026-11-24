@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'auth_service.dart';
-import 'community_service.dart';
 import 'connectivity_service.dart';
 import 'notes_repository.dart';
 import 'offline_queue.dart';
@@ -13,17 +12,10 @@ import 'offline_queue.dart';
 /// key 'offline-queue-v1') and replays the queued ops against the
 /// custom backend.
 ///
-/// Replay is implemented for op types 'message', 'note' and 'report':
-///   - 'message' → CommunityService (text / photo / poll). The
-///     'flaggedOriginal' field is stripped before replay — it lives
-///     only in the local queue and is never uploaded.
-///   - 'note' → NotesRepository.saveNote.
-///   - 'report' → CommunityService.report.
-/// Voice messages and blocks are NOT replayed: voice recording was a
-/// UI stub with no backend storage, and blocking is local-only now —
-/// a queued 'block' op is dropped (it is already applied locally).
-/// Group creation sync is still a TODO — only the op types above
-/// replay; offline-created groups stay local until that is built.
+/// Replay is implemented for op type 'note' only (per-chapter notes
+/// saved while offline → NotesRepository.saveNote). Any other op type
+/// is dropped: the community message/report ops belonged to the
+/// removed community feature and can never replay.
 ///
 /// [isOfflineStream] emits true while the device is offline, for the UI
 /// offline indicator.
@@ -65,7 +57,7 @@ class SyncService {
     if (!AuthService.instance.isSignedIn) return;
     _syncing = true;
     try {
-      final queue = await CommunityService.loadQueue();
+      final queue = await OfflineQueue.loadQueue();
       if (queue.isEmpty) return;
       final remaining = OfflineQueue();
       for (final op in queue.pending) {
@@ -77,48 +69,20 @@ class SyncService {
         }
         if (!done) remaining.enqueue(op);
       }
-      await CommunityService.persistQueue(remaining);
+      await OfflineQueue.persistQueue(remaining);
     } finally {
       _syncing = false;
     }
   }
 
-  /// Replays one queued op. Returns true when the op is done (an unknown
-  /// *message kind* inside a 'message' op is dropped so it cannot loop
-  /// forever); returns false to keep the op queued for a later sync.
-  /// Unknown *op types* are kept, not dropped — see the class comment.
+  /// Replays one queued op. Returns true when the op is done;
+  /// returns false to keep the op queued for a later sync. Unknown
+  /// op types are dropped (they belong to the removed community
+  /// feature and can never replay, so keeping them would loop
+  /// forever).
   Future<bool> _replay(Map<String, dynamic> op) async {
     final type = op['type'] as String?;
     switch (type) {
-      case 'message':
-        // 'flaggedOriginal' is local-only: never uploaded.
-        final messageType = op['messageType'] as String? ?? 'text';
-        switch (messageType) {
-          case 'text':
-            await CommunityService.instance.sendText(
-              (op['text'] as String?) ?? '',
-            );
-          case 'photo':
-            final localPath = op['localPath'] as String?;
-            if (localPath == null) return true;
-            await CommunityService.instance.sendPhoto(localPath);
-          case 'poll':
-            final poll = op['poll'];
-            if (poll is! Map) return true;
-            final pollMap = poll.cast<String, dynamic>();
-            await CommunityService.instance.sendPoll(
-              (pollMap['question'] as String?) ?? '',
-              (pollMap['options'] as List?)
-                      ?.map((e) => e.toString())
-                      .toList() ??
-                  [],
-            );
-          default:
-            // 'voice' was a UI stub (no backend storage) and any other
-            // unknown message kind — drop, don't loop forever.
-            return true;
-        }
-        return true;
       case 'note':
         await NotesRepository.instance.saveNote(
           chapterId: (op['chapterId'] as String?) ?? '',
@@ -126,22 +90,8 @@ class SyncService {
           localPhotoPath: op['localPhotoPath'] as String?,
         );
         return true;
-      case 'report':
-        final messageId = op['messageId'] as String?;
-        if (messageId == null) return true;
-        await CommunityService.instance.report(
-          messageId,
-          (op['reason'] as String?) ?? '',
-        );
-        return true;
-      case 'block':
-        // Blocking is local-only now and already applied when the op
-        // was queued — drop it.
-        return true;
       default:
-        // Unknown op type — kept in the queue so the action is not
-        // silently lost.
-        return false;
+        return true;
     }
   }
 }

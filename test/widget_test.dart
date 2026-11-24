@@ -83,8 +83,7 @@ void main() {
 
     await tester.tap(find.text('All chapters'));
     await tester.pumpAndSettle();
-    // The Community tab builds text fields too, so target the All-tab
-    // search field by its key rather than by type.
+    // Target the All-tab search field by its key rather than by type.
     await tester.enterText(find.byKey(const Key('search-field')), 'Vectors');
     await tester.pumpAndSettle();
     // 'Vectors' matches two chapters: Physics Ch.2 and Higher Math Ch.2.
@@ -209,7 +208,7 @@ void main() {
   });
 
   testWidgets(
-      'Material navigation bar switches between Today, All, Community and Profile',
+      'Material navigation bar switches between Today, All and Profile',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
     await enterApp(tester);
@@ -226,16 +225,6 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     expect(find.text('Motivation'), findsOneWidget);
-    await tester.tap(find.text('Community'));
-    // No pumpAndSettle here: the community feed polls the backend
-    // every 2.5 s, so the test harness never settles. A few bounded
-    // pumps are enough for the first (empty) feed to render.
-    await tester.pump(const Duration(seconds: 3));
-    await tester.pump(const Duration(seconds: 3));
-    // The Community tab has no AppBar of its own (the HomeScreen AppBar
-    // stays on top), so 'Community' appears exactly once — the
-    // NavigationBar destination label.
-    expect(find.text('Community'), findsOneWidget);
     await tester.tap(find.text('Profile'));
     await tester.pumpAndSettle();
     // No guest mode: the profile tab routes to the login screen when
